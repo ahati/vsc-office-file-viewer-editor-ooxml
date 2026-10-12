@@ -4,10 +4,10 @@
  * The engines never reach for a font package on their own: docx takes a provider through
  * `configureDefaultFonts({ fonts })` (process-wide, memoized) and pptx takes `PptxFontFace[]`
  * directly. xlsx has no font API at all (SCOPING R8). Either way the bytes come from
- * `@betteroffice/fonts`, whose asset URLs the build rewrote to `__boAssetUrl(...)` lookups served
+ * `@betteroffice/fonts`, whose asset URLs the build rewrote to `__extAssetUrl(...)` lookups served
  * from `out/media/assets/` — so this stays fully offline.
  *
- * `betterofficeViewer.fonts: "off"` skips the bundled provider, *but* pptx still gets one
+ * `officeFileViewer.fonts: "off"` skips the bundled provider, *but* pptx still gets one
  * last-resort face: `PptxEditor` requires a non-empty `fonts` array and no-ops/blank-renders
  * without glyph metrics. That face is resolved through `resolveLastResortFace` (a single TTF) and
  * the choice is reported to diagnostics by the caller.
@@ -44,12 +44,12 @@ export function configureDocxFonts(config: ViewerWebviewConfig): void {
 		try {
 			setGoogleFontsEnabled(false);
 		} catch (error) {
-			console.warn('[betteroffice-viewer] setGoogleFontsEnabled(false) failed', error);
+			console.warn('[office-file-viewer] setGoogleFontsEnabled(false) failed', error);
 		}
 	}
 
 	if (config.fonts === 'off') {
-		console.info('[betteroffice-viewer] bundled docx fonts disabled (betterofficeViewer.fonts=off)');
+		console.info('[office-file-viewer] bundled docx fonts disabled (officeFileViewer.fonts=off)');
 		return;
 	}
 
@@ -91,7 +91,7 @@ export async function loadPptxFontFaces(config: ViewerWebviewConfig): Promise<Pp
 			throw new Error('no pptx font face could be resolved (PptxEditor requires a non-empty fonts array)');
 		}
 		if (config.fonts === 'off') {
-			console.info('[betteroffice-viewer] pptx fonts=off: using a single last-resort face');
+			console.info('[office-file-viewer] pptx fonts=off: using a single last-resort face');
 		}
 		return resolved;
 	})();

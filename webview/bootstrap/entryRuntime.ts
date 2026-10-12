@@ -9,7 +9,7 @@
  *   - the debounced `state { zoom, page }` message.
  *
  * Mounts are dynamically imported (`await import('../mounts/docx')`) so nothing from
- * `@betteroffice/*` is evaluated before `bootstrap()` installed `__boAssetUrl` / `__boWorkerUrl`.
+ * `@betteroffice/*` is evaluated before `bootstrap()` installed `__extAssetUrl` / `__extWorkerUrl`.
  */
 import { bootstrap, getTimings, recordTiming } from '../bootstrap/assetBootstrap';
 import { clearErrorPanel, renderErrorPanel, setStatus } from '../chrome/errorPanel';
@@ -70,7 +70,7 @@ export function runViewerEntry(options: EntryOptions): void {
 		try {
 			vscode.postMessage(message);
 		} catch (error) {
-			console.warn('[betteroffice-viewer] postMessage failed', error);
+			console.warn('[office-file-viewer] postMessage failed', error);
 		}
 	};
 
@@ -80,7 +80,7 @@ export function runViewerEntry(options: EntryOptions): void {
 	const pendingState: { zoom?: number; page?: number; pageCount?: number } = {};
 	const fail = (phase: string, error: unknown): void => {
 		const message = error instanceof Error ? error.message : String(error);
-		console.error(`[betteroffice-viewer] ${format} ${phase} failed`, error);
+		console.error(`[office-file-viewer] ${format} ${phase} failed`, error);
 		renderErrorPanel(phase, message);
 		post({ type: 'load-error', phase, message });
 	};
@@ -113,7 +113,7 @@ export function runViewerEntry(options: EntryOptions): void {
 				try {
 					vscode.setState(snapshot);
 				} catch (error) {
-					console.warn('[betteroffice-viewer] setState failed', error);
+					console.warn('[office-file-viewer] setState failed', error);
 				}
 			}, STATE_DEBOUNCE_MS);
 		},

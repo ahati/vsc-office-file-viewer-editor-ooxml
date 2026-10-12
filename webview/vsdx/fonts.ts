@@ -9,7 +9,7 @@
  * `resolveMetricCompatFace('Arial', bold, italic) ?? resolveLastResortFace(...)` and loaded with
  * `loadBundledFontBytes`. Both live in the bundled-and-offline `@betteroffice/fonts` package whose
  * `new URL('../assets/*.ttf', import.meta.url)` lookups are rewritten by the build into manifest
- * lookups (`__boAssetUrl`), so nothing is fetched from the network.
+ * lookups (`__extAssetUrl`), so nothing is fetched from the network.
  *
  * `config.fonts === 'off'` still loads exactly one last-resort face: the engine needs at least one
  * registered face to measure text at all. `config.cjkFonts === 'cdn'` swaps the source for the

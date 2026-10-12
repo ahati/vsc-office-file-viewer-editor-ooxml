@@ -35,15 +35,15 @@ export class OfficeDocument implements vscode.CustomDocument {
  *   - builds a CSP-locked webview that loads `out/media/webview-<format>.js`,
  *   - webview `ready` -> host `init {format, bytes, config, fileName, mediaBase}`,
  *   - `FileSystemWatcher` on the file pushes `fileChanged {bytes}`,
- *   - message trace + engine errors land in the "BetterOffice Viewer" output channel and a 200-line
- *     in-memory ring exposed by `betterofficeViewer.getDiagnostics`.
+ *   - message trace + engine errors land in the "Office File Viewer" output channel and a 200-line
+ *     in-memory ring exposed by `officeFileViewer.getDiagnostics`.
  *
  * M2 replaces this class with a `CustomEditorProvider` carrying the save/backup/undo lifecycle
  * (DESIGN §3.4); keep the HTML/CSP and message plumbing here as the single place that owns them.
  */
 export class OfficeProvider implements vscode.CustomReadonlyEditorProvider<OfficeDocument> {
-	public static readonly VIEW_TYPE_PREFIX = 'betterofficeViewer';
-	public static readonly OUTPUT_CHANNEL_NAME = 'BetterOffice Viewer';
+	public static readonly VIEW_TYPE_PREFIX = 'officeFileViewer';
+	public static readonly OUTPUT_CHANNEL_NAME = 'Office File Viewer';
 
 	/** Webview entry bundles are emitted as `out/media/webview-<format>.js` (scripts/build.mjs). */
 	private static readonly MEDIA_DIR = ['out', 'media'] as const;
@@ -56,7 +56,7 @@ export class OfficeProvider implements vscode.CustomReadonlyEditorProvider<Offic
 	private static readonly ring: string[] = [];
 	private static readonly RING_LIMIT = 200;
 
-	/** Live panels, keyed by document URI, so `betterofficeViewer.reload` can re-init them. */
+	/** Live panels, keyed by document URI, so `officeFileViewer.reload` can re-init them. */
 	private static readonly liveViewers = new Map<string, { reload(): void }>();
 
 	public static register(context: vscode.ExtensionContext, format: ViewerFormat): vscode.Disposable {
@@ -74,7 +74,7 @@ export class OfficeProvider implements vscode.CustomReadonlyEditorProvider<Offic
 		OfficeProvider.output.appendLine(line);
 		OfficeProvider.ring.push(line);
 		if (OfficeProvider.ring.length > OfficeProvider.RING_LIMIT) OfficeProvider.ring.shift();
-		console.log(`[betteroffice-viewer] ${message}`);
+		console.log(`[office-file-viewer] ${message}`);
 	}
 
 	/** Most recent lifecycle events (oldest first); used by the diagnostics commands and tests. */
@@ -82,7 +82,7 @@ export class OfficeProvider implements vscode.CustomReadonlyEditorProvider<Offic
 		return [...OfficeProvider.ring];
 	}
 
-	/** The shared "BetterOffice Viewer" output channel (shown by the diagnostics command). */
+	/** The shared "Office File Viewer" output channel (shown by the diagnostics command). */
 	public static getOutputChannel(): vscode.OutputChannel {
 		return OfficeProvider.output;
 	}
@@ -253,7 +253,7 @@ export class OfficeProvider implements vscode.CustomReadonlyEditorProvider<Offic
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<meta http-equiv="Content-Security-Policy" content="${csp}" />
 	<base href="${mediaBase}" />${stylesheetTag}
-	<title>BetterOffice Viewer</title>
+	<title>Office File Viewer</title>
 	<style>
 		* { box-sizing: border-box; margin: 0; padding: 0; }
 		html, body {
@@ -310,7 +310,7 @@ function toArrayBuffer(data: Uint8Array): ArrayBuffer {
 	return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
 }
 
-/** Pinned CDN origin for opt-in CJK font faces (`betterofficeViewer.cjkFonts: "cdn"`). */
+/** Pinned CDN origin for opt-in CJK font faces (`officeFileViewer.cjkFonts: "cdn"`). */
 const CJK_FONT_ORIGIN = 'https://cdn.jsdelivr.net';
 
 /**

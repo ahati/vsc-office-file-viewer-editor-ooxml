@@ -12,9 +12,9 @@ export interface ViewerWebviewConfig {
 	initialZoom: 'fitPage' | 'fitWidth' | '100';
 }
 
-/** Reads `betterofficeViewer.*` once per editor resolution. */
+/** Reads `officeFileViewer.*` once per editor resolution. */
 export function getViewerWebviewConfig(): ViewerWebviewConfig {
-	const config = vscode.workspace.getConfiguration('betterofficeViewer');
+	const config = vscode.workspace.getConfiguration('officeFileViewer');
 	const pick = <T extends string>(key: string, allowed: readonly T[], fallback: T): T => {
 		const value = config.get<string>(key, fallback);
 		return allowed.includes(value as T) ? (value as T) : fallback;

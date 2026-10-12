@@ -14,27 +14,27 @@ export function activate(context: vscode.ExtensionContext): void {
 	OfficeProvider.log(`activated (${OfficeProvider.FORMATS.join(', ')})`);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('betterofficeViewer.getDiagnostics', () => {
+		vscode.commands.registerCommand('officeFileViewer.getDiagnostics', () => {
 			const lines = OfficeProvider.getDiagnostics();
 			OfficeProvider.log(`getDiagnostics -> ${lines.length} entries`);
 			OfficeProvider.getOutputChannel().show(true);
 			return lines;
 		}),
 
-		vscode.commands.registerCommand('betterofficeViewer.reload', () => {
+		vscode.commands.registerCommand('officeFileViewer.reload', () => {
 			if (!OfficeProvider.hasActiveViewers()) {
-				void vscode.window.showInformationMessage('BetterOffice Viewer: no open viewer to reload.');
+				void vscode.window.showInformationMessage('Office File Viewer: no open viewer to reload.');
 				return;
 			}
 			const count = OfficeProvider.reloadActiveViewers();
 			OfficeProvider.log(`reload requested for ${count} viewer(s)`);
 		}),
 
-		vscode.commands.registerCommand('betterofficeViewer.copyDiagnostics', async () => {
+		vscode.commands.registerCommand('officeFileViewer.copyDiagnostics', async () => {
 			const lines = OfficeProvider.getDiagnostics();
 			await vscode.env.clipboard.writeText(lines.join('\n'));
 			void vscode.window.showInformationMessage(
-				`BetterOffice Viewer: copied ${lines.length} diagnostics entries to the clipboard.`,
+				`Office File Viewer: copied ${lines.length} diagnostics entries to the clipboard.`,
 			);
 		}),
 	);

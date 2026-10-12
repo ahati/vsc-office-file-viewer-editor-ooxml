@@ -178,7 +178,7 @@ export function mountVsdxShell(root: HTMLElement, options: VsdxShellOptions): Vs
 			spinner.hidden = !busy;
 			if (busy) hideBanner();
 		},
-		onWarning: (message) => console.warn(`[betteroffice-viewer] vsdx: ${message}`),
+		onWarning: (message) => console.warn(`[office-file-viewer] vsdx: ${message}`),
 	});
 
 	const zoom = new ZoomController(viewport, renderer, {
@@ -186,7 +186,7 @@ export function mountVsdxShell(root: HTMLElement, options: VsdxShellOptions): Vs
 			if (!disposed) syncZoom();
 		},
 		onError: (error) => reportRenderError(error),
-		onWarning: (message) => console.warn(`[betteroffice-viewer] vsdx: ${message}`),
+		onWarning: (message) => console.warn(`[office-file-viewer] vsdx: ${message}`),
 	});
 
 	const layers = new LayersPanel(
@@ -203,7 +203,7 @@ export function mountVsdxShell(root: HTMLElement, options: VsdxShellOptions): Vs
 				showBanner(errorText(error));
 				options.onError?.('render', errorText(error));
 			},
-			onWarning: (message) => console.warn(`[betteroffice-viewer] vsdx: ${message}`),
+			onWarning: (message) => console.warn(`[office-file-viewer] vsdx: ${message}`),
 		},
 	);
 	body.appendChild(layers.root);

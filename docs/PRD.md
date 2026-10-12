@@ -1,10 +1,10 @@
-# PRD — BetterOffice Viewer: full Office support for VS Code
+# PRD — Office File Editor & Viewer: full Office support for VS Code
 
 | | |
 |---|---|
 | **Status** | Draft v1 — ready for review |
 | **Relates to** | [`docs/SCOPING.md`](./SCOPING.md) (research evidence & upstream analysis), [`docs/DESIGN.md`](./DESIGN.md) (technical design) |
-| **Working name** | BetterOffice Viewer · id `ahati.betteroffice-viewer` (see §13 open decisions) |
+| **Name** | Office File Editor & Viewer · id `ahati.office-file-editor-viewer` (decided; BetterOffice appears in attribution only) |
 | **Successor of** | `ahati.vscode-office-file-reader-viewer` 0.1.2 (@silurus/ooxml, view-only) |
 
 ---
@@ -195,4 +195,4 @@ greenfield Visio (best: 446 installs).
 2. Fonts bundled by default → **yes**; CJK via opt-in CDN — *confirm*
 3. vsdx delivery → **vendored snapshot + CI wasm build** — *confirm*
 4. Editing default-on for OOXML in M2 (vs read-only forever) → **default-on, force-read-only setting** — *confirm*
-5. Name/publisher (`ahati.betteroffice-viewer`, "BetterOffice Viewer") + dual-registry publish — *confirm*
+5. Name/publisher — **DECIDED**: `ahati.office-file-editor-viewer`, display name "Office File Editor & Viewer"; BetterOffice branding appears only in attribution. Dual-registry publish (Marketplace + Open VSX) — *confirm publish targets*

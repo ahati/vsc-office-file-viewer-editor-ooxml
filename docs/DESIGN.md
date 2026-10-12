@@ -1,4 +1,4 @@
-# Design — BetterOffice Viewer
+# Design — Office File Editor & Viewer
 
 Technical design for the requirements in [`docs/PRD.md`](./PRD.md). Upstream analysis and evidence:
 [`docs/SCOPING.md`](./SCOPING.md). Upstream pin under study: `openooxml/betteroffice@57fc1984`.
@@ -32,10 +32,10 @@ settings, diagnostics, save/backup orchestration.
 │  React mount: DocxEditor | XlsxEditor | PptxEditor (readOnly|editable)        │
 │  vsdx: own canvas shell (openDiagram → layoutPage → paintPage)                │
 └───────────────┬───────────────────────────────────────────────────────────────┘
-                │ new Worker(blobUrl) — docx only; wrapper posts bo-assets first
+                │ new Worker(blobUrl) — docx only; wrapper posts ext-assets first
 ┌───────────────▼────────────────── engine worker (docx) ───────────────────────┐
 │ residentEngineWorker.mjs (bundled self-contained, fetch-shim preamble)        │
-│  · 4 wasm modules + font TTFs served from the injected bo-assets byte map     │
+│  · 4 wasm modules + font TTFs served from the injected ext-assets byte map     │
 │  · never fetches webview-resource URIs itself (avoids vscode#315494)          │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -89,7 +89,7 @@ settings, diagnostics, save/backup orchestration.
 ### 3.1 Providers
 
 One provider class parameterized by format; one `viewType` per format family
-(`betterofficeViewer.docx|docm|xlsx|xlsm|pptx|pptm|vsdx`), each with `priority: "default"`.
+(`officeFileViewer.docx|docm|xlsx|xlsm|pptx|pptm|vsdx`), each with `priority: "default"`.
 `supportsMultipleEditorsPerDocument: false` (one engine per document; memory bound, SCOPING R7).
 
 - **M1:** `CustomReadonlyEditorProvider` for all formats (viewer-only, matches PRD M1).
@@ -137,7 +137,7 @@ non-blocking message and leaves the document dirty.
 ### 3.5 Diagnostics
 
 Static ring buffer (200 lines, predecessor pattern) mirrored to an `OutputChannel`
-("BetterOffice Viewer") and exposed via the `betterofficeViewer.getDiagnostics` command. Engine error events
+("Office File Viewer") and exposed via the `officeFileViewer.getDiagnostics` command. Engine error events
 (`onError`, `DocxWorkerError` stages, pptx chunk-load errors) are captured with format, phase, and timing
 (`init → wasmReady → sessionReady → firstFrame`), powering the N1 latency and support workflows.
 
@@ -163,10 +163,10 @@ webview resources is broken on VS Code ≥ 1.119 (#315494), (c) wasm URLs have n
    mounting, so the engines' memoized init reuses them and no default-URL fetch path is ever exercised.
 2. **docx worker bundling.** esbuild produces one self-contained IIFE (`out/media/workers/worker-docx.js`): the
    worker entry imports `workerFetchShim.ts` first, then upstream `residentEngineWorker.mjs`; all chunk imports are
-   inlined; `new URL('*.wasm', import.meta.url)` expressions inside are rewritten to `__boAssetUrl('<name>')`
+   inlined; `new URL('*.wasm', import.meta.url)` expressions inside are rewritten to `__extAssetUrl('<name>')`
    lookups (§5).
-3. **Bootstrap preamble.** The shim defines `__boAssetUrl` to yield `bo-asset://<name>` URLs and patches `fetch` to
-   serve them from a byte map delivered by a first `{type:'bo-assets', assets}` message (with a pending-queue for
+3. **Bootstrap preamble.** The shim defines `__extAssetUrl` to yield `ext-asset://<name>` URLs and patches `fetch` to
+   serve them from a byte map delivered by a first `{type:'ext-assets', assets}` message (with a pending-queue for
    early fetches). Consequence: the worker never performs a network/service-worker request — the entire #315494 class
    is avoided **without patching engine sources**.
 4. **Worker-constructor wrapper.** `assetBootstrap` wraps `self.Worker`: on construction it posts the byte map (all
@@ -267,7 +267,7 @@ shape-text find over `snapshot()`, hit-test omitted (read-only). Export commands
 - **pptx/vsdx:** `loadBundledFontBytes(resolveMetricCompatFace('Arial', b, i) ?? resolveLastResortFace(...))` for the
   4 style variants → `fonts` props (`PptxFontFace[]` / `VsdxFontFace[]`) — exact upstream-demo pattern.
 - **xlsx:** no font API (SCOPING R8) — engine-internal metrics; spike S3 documents quality.
-- **CJK:** setting `betterofficeViewer.cjkFonts: "cdn"` lazily imports `@betteroffice/fonts/cdn` (adds the pinned
+- **CJK:** setting `officeFileViewer.cjkFonts: "cdn"` lazily imports `@betteroffice/fonts/cdn` (adds the pinned
   jsdelivr origin to CSP `font-src`/`connect-src`/`script-src` for that panel) — the only network path in the
   product, opt-in, default off.
 
@@ -286,22 +286,22 @@ shape-text find over `snapshot()`, hit-test omitted (read-only). Export commands
 | host → wv | `requestSave` | – | E1 flush → `saved` |
 | wv → host | `saved` | `{bytes}` (transfer) | host writes; also used for `saveAs` |
 | host → wv | `undo`/`redo` | – | VS Code edit-history integration (M2) |
-| host → wv | `bo-assets` (worker) | `{assets: Record<name, ArrayBuffer>}` | §4.2 preamble handshake |
+| host → wv | `ext-assets` (worker) | `{assets: Record<name, ArrayBuffer>}` | §4.2 preamble handshake |
 | wv → host | `state` | `{scroll, zoom, page}` | `getState/setState` restoration |
 
 ## 10. Settings (contributes.configuration)
 
 ```jsonc
-"betterofficeViewer.editing":            { "type": "boolean", "default": true,  "description": "Open OOXML files editable (M2). When off, always read-only." },
-"betterofficeViewer.fonts":              { "type": "string",  "default": "bundled", "enum": ["bundled", "off"], "description": "Bundled metric-compatible fonts for Office-accurate layout. 'off' uses system fonts only." },
-"betterofficeViewer.cjkFonts":           { "type": "string",  "default": "off", "enum": ["off", "cdn"], "description": "Fetch CJK font faces from the pinned betteroffice CDN. The only network access this extension can perform." },
-"betterofficeViewer.initialZoom":        { "type": "string",  "default": "fitPage", "enum": ["fitPage", "fitWidth", "100"] },
-"betterofficeViewer.forceReadOnly":      { "type": "boolean", "default": false }   // alias kept explicit for policy admins
+"officeFileViewer.editing":            { "type": "boolean", "default": true,  "description": "Open OOXML files editable (M2). When off, always read-only." },
+"officeFileViewer.fonts":              { "type": "string",  "default": "bundled", "enum": ["bundled", "off"], "description": "Bundled metric-compatible fonts for Office-accurate layout. 'off' uses system fonts only." },
+"officeFileViewer.cjkFonts":           { "type": "string",  "default": "off", "enum": ["off", "cdn"], "description": "Fetch CJK font faces from the pinned betteroffice CDN. The only network access this extension can perform." },
+"officeFileViewer.initialZoom":        { "type": "string",  "default": "fitPage", "enum": ["fitPage", "fitWidth", "100"] },
+"officeFileViewer.forceReadOnly":      { "type": "boolean", "default": false }   // alias kept explicit for policy admins
 ```
 
-Commands: `betterofficeViewer.exportPng`, `betterofficeViewer.exportSvg` (vsdx), `betterofficeViewer.exportPdf`
-(vsdx), `betterofficeViewer.print`, `betterofficeViewer.copyDiagnostics`, `betterofficeViewer.getDiagnostics`,
-`betterofficeViewer.reload`.
+Commands: `officeFileViewer.exportPng`, `officeFileViewer.exportSvg` (vsdx), `officeFileViewer.exportPdf`
+(vsdx), `officeFileViewer.print`, `officeFileViewer.copyDiagnostics`, `officeFileViewer.getDiagnostics`,
+`officeFileViewer.reload`.
 
 ## 11. Performance & memory
 

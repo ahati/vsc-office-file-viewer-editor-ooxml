@@ -75,7 +75,7 @@ export class ZoomController {
 		return { scale: this.renderer.scale, percent: this.percent, mode: this.modeValue };
 	}
 
-	/** Initial zoom requested by `betterofficeViewer.initialZoom`. Does not paint. */
+	/** Initial zoom requested by `officeFileViewer.initialZoom`. Does not paint. */
 	setInitial(value: 'fitPage' | 'fitWidth' | '100'): void {
 		if (value === 'fitPage') this.applyScale(this.fitScale('fitPage'), undefined, 'fitPage', false);
 		else if (value === 'fitWidth') this.applyScale(this.fitScale('fitWidth'), undefined, 'fitWidth', false);

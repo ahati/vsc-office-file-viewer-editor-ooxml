@@ -11,22 +11,22 @@
  *   3. diagnostics/command sanity: `getDiagnostics` returns an array and `copyDiagnostics` resolves.
  *
  * The host reports every lifecycle step through the shared diagnostics ring
- * (`OfficeProvider.log`), so this suite is driven purely by the `betterofficeViewer.getDiagnostics`
+ * (`OfficeProvider.log`), so this suite is driven purely by the `officeFileViewer.getDiagnostics`
  * command — no test-only hooks inside the extension.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 
-const EXTENSION_ID = 'ahati.betteroffice-viewer';
-const DIAGNOSTICS_COMMAND = 'betterofficeViewer.getDiagnostics';
-const COPY_DIAGNOSTICS_COMMAND = 'betterofficeViewer.copyDiagnostics';
+const EXTENSION_ID = 'ahati.office-file-editor-viewer';
+const DIAGNOSTICS_COMMAND = 'officeFileViewer.getDiagnostics';
+const COPY_DIAGNOSTICS_COMMAND = 'officeFileViewer.copyDiagnostics';
 
 const VIEW_TYPES = {
-	docx: 'betterofficeViewer.docx',
-	xlsx: 'betterofficeViewer.xlsx',
-	pptx: 'betterofficeViewer.pptx',
-	vsdx: 'betterofficeViewer.vsdx',
+	docx: 'officeFileViewer.docx',
+	xlsx: 'officeFileViewer.xlsx',
+	pptx: 'officeFileViewer.pptx',
+	vsdx: 'officeFileViewer.vsdx',
 } as const;
 type Format = keyof typeof VIEW_TYPES;
 const FORMATS: readonly Format[] = ['docx', 'xlsx', 'pptx', 'vsdx'];
@@ -36,7 +36,7 @@ const SAMPLES: Record<Format, string> = {
 	docx: 'sample.docx',
 	xlsx: 'sample.xlsx',
 	pptx: 'sample.pptx',
-	vsdx: 'betteroffice-demo.vsdx',
+	vsdx: 'sample.vsdx',
 };
 
 /**
@@ -273,5 +273,5 @@ export async function run(): Promise<void> {
 	results.push(await testExternalChange(samplesDir));
 	results.push(await testDiagnosticsSurface());
 
-	console.log(`\n=== betteroffice-viewer integration results ===\n${results.join('\n')}\n`);
+	console.log(`\n=== office-file-editor-viewer integration results ===\n${results.join('\n')}\n`);
 }

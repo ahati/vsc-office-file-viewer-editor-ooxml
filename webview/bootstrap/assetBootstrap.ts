@@ -6,7 +6,7 @@
  * Contract (DESIGN §4.2):
  *
  *   1. read `out/media/manifest.json` via the `mediaBase` webview URI,
- *   2. install the manifest-driven `__boAssetUrl` / `__boWorkerUrl` resolvers — the build rewrote
+ *   2. install the manifest-driven `__extAssetUrl` / `__extWorkerUrl` resolvers — the build rewrote
  *      every engine `new URL('<literal>', import.meta.url)` lookup into a call to these globals
  *      (scripts/build.mjs, `asset-import-rewrite`),
  *   3. fetch every wasm/ttf byte as an `ArrayBuffer` (report S1: the engines have no asset-root
@@ -14,10 +14,10 @@
  *   4. fetch the docx engine worker bundle and turn it into a `blob:` URL (a VS Code webview worker
  *      must never import/fetch a webview resource itself — microsoft/vscode#315494),
  *   5. wrap `self.Worker` so every spawned worker receives the byte map as its very first message
- *      (`{ type: 'bo-assets' }`), which `workerFetchShim.ts` serves from `bo-asset://` URLs.
+ *      (`{ type: 'ext-assets' }`), which `workerFetchShim.ts` serves from `ext-asset://` URLs.
  *
  * The Webview main thread keeps its own copy of every byte: docx loads its wasm + TTF files on the
- * main thread through `__boAssetUrl(...)` (fetch of a `cspSource` URL, the supported path), while
+ * main thread through `__extAssetUrl(...)` (fetch of a `cspSource` URL, the supported path), while
  * the worker receives *copies* so the main-thread buffers stay usable. The extra copy only happens
  * when an engine actually spawns a worker.
  *
@@ -63,7 +63,7 @@ interface BootstrapState {
 	docxWorkerBlobUrl?: string;
 	startedAt: number;
 	timings: Record<string, number>;
-	/** Promise of `{ type: 'bo-assets' }` payloads pending delivery to a spawn. */
+	/** Promise of `{ type: 'ext-assets' }` payloads pending delivery to a spawn. */
 	installed: boolean;
 }
 
@@ -99,7 +99,7 @@ export function getMediaBase(): string {
 export function getAssetUrl(name: string, fallbackUrl?: string): string {
 	const relPath = state.manifest?.assets[name];
 	if (relPath) return state.mediaBase + relPath;
-	return fallbackUrl ?? `bo-missing-asset://${encodeURIComponent(name)}`;
+	return fallbackUrl ?? `ext-missing-asset://${encodeURIComponent(name)}`;
 }
 
 /** Bytes of a manifest asset fetched during {@link bootstrap} (docx/pptx pass these to `initWasm`). */
@@ -133,16 +133,16 @@ function detectFormat(): ViewerFormat | undefined {
 	return fromHost === 'docx' || fromHost === 'xlsx' || fromHost === 'pptx' || fromHost === 'vsdx' ? fromHost : undefined;
 }
 
-/** Installs the manifest-backed `__boAssetUrl` / `__boWorkerUrl` globals (build-injected lookups). */
+/** Installs the manifest-backed `__extAssetUrl` / `__extWorkerUrl` globals (build-injected lookups). */
 function installAssetUrlGlobals(): void {
-	globalThis.__boAssetUrl = (name: string, fallbackUrl?: string): string => {
+	globalThis.__extAssetUrl = (name: string, fallbackUrl?: string): string => {
 		const relPath = state.manifest?.assets[name];
 		if (relPath) return state.mediaBase + relPath;
 		// Unknown asset: keep the esbuild-emitted URL (relative to <base>) rather than throwing —
 		// a single missing face must not take the whole viewer down.
-		return fallbackUrl ?? `bo-missing-asset://${encodeURIComponent(name)}`;
+		return fallbackUrl ?? `ext-missing-asset://${encodeURIComponent(name)}`;
 	};
-	globalThis.__boWorkerUrl = (logical: string): string => {
+	globalThis.__extWorkerUrl = (logical: string): string => {
 		if (logical === 'docx') return getDocxWorkerBlobUrl();
 		// xlsx/pptx run in-thread (their dists ship no worker anywhere); anything else is a bug.
 		throw new Error(`no engine worker bundle is available for "${logical}" (xlsx/pptx run in-thread)`);
@@ -151,7 +151,7 @@ function installAssetUrlGlobals(): void {
 
 /**
  * Spawns are wrapped so the asset map is posted before any engine message. `postMessage` to a
- * dedicated worker preserves order, so `bo-assets` is always the first message the shim sees — even
+ * dedicated worker preserves order, so `ext-assets` is always the first message the shim sees — even
  * if the engine posts `warm`/`open` in the same task.
  */
 function installWorkerAssetHandshake(): void {
@@ -174,11 +174,11 @@ function installWorkerAssetHandshake(): void {
 					assets[name] = copy;
 					transfer.push(copy);
 				}
-				this.postMessage({ type: 'bo-assets', assets }, transfer);
+				this.postMessage({ type: 'ext-assets', assets }, transfer);
 			} catch (error) {
 				// Never let seeding break worker construction: the shim will serve whatever it got
 				// (or report the failing asset through the structured error panel).
-				console.warn('[betteroffice-viewer] failed to seed engine worker assets', error);
+				console.warn('[office-file-viewer] failed to seed engine worker assets', error);
 			}
 		}
 	}
@@ -290,4 +290,4 @@ export function resetBootstrapForTests(): void {
 	state.installed = false;
 }
 
-export const BO_ASSET_SCHEME = 'bo-asset://';
+export const EXT_ASSET_SCHEME = 'ext-asset://';

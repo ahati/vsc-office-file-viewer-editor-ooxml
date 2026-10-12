@@ -2,7 +2,7 @@
  * Webview entry — Word documents (.docx / .docm).
  *
  * Handshake (DESIGN §3.3/§9): `ready` -> host `init { bytes, config, fileName, mediaBase }` ->
- * `bootstrap()` (assets + docx engine worker blob + `bo-assets` handshake) -> dynamic import of the
+ * `bootstrap()` (assets + docx engine worker blob + `ext-assets` handshake) -> dynamic import of the
  * `docx` mount -> `DocxEditor` in read-only viewing mode -> `loaded { fileName, timings }`.
  *
  * Everything format-specific (fonts, props, find/reset APIs) lives in `webview/mounts/docx.tsx`;

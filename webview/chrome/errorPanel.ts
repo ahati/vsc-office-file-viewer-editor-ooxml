@@ -99,7 +99,7 @@ export function renderErrorPanel(phase: string, message: string): void {
 export function diagnosticsText(phase: string, message: string): string {
 	const format = (globalThis as { __BO_FORMAT__?: unknown }).__BO_FORMAT__;
 	return [
-		'BetterOffice Viewer — load failure',
+		'Office File Viewer — load failure',
 		`format: ${typeof format === 'string' ? format : 'unknown'}`,
 		`phase: ${phase}`,
 		`user agent: ${navigator.userAgent}`,

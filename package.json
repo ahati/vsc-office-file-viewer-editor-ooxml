@@ -1,14 +1,14 @@
 {
-  "name": "betteroffice-viewer",
-  "displayName": "BetterOffice Viewer",
-  "description": "View and edit .docx, .xlsx, .pptx and Visio .vsdx files with high-fidelity WASM rendering — offline, no telemetry.",
+  "name": "office-file-editor-viewer",
+  "displayName": "Office File Editor & Viewer",
+  "description": "Open Word, Excel, PowerPoint and Visio files with high-fidelity, fully offline WASM rendering — no telemetry.",
   "version": "0.1.0",
   "publisher": "ahati",
   "license": "Apache-2.0",
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/ahati/betteroffice-viewer"
+    "url": "https://github.com/ahati/office-file-editor-viewer"
   },
   "icon": "media/icon.png",
   "engines": {
@@ -34,8 +34,8 @@
   "contributes": {
     "customEditors": [
       {
-        "viewType": "betterofficeViewer.docx",
-        "displayName": "BetterOffice Word Viewer",
+        "viewType": "officeFileViewer.docx",
+        "displayName": "Office File Viewer (Word)",
         "selector": [
           {
             "filenamePattern": "*.docx"
@@ -47,8 +47,8 @@
         "priority": "default"
       },
       {
-        "viewType": "betterofficeViewer.xlsx",
-        "displayName": "BetterOffice Excel Viewer",
+        "viewType": "officeFileViewer.xlsx",
+        "displayName": "Office File Viewer (Excel)",
         "selector": [
           {
             "filenamePattern": "*.xlsx"
@@ -60,8 +60,8 @@
         "priority": "default"
       },
       {
-        "viewType": "betterofficeViewer.pptx",
-        "displayName": "BetterOffice PowerPoint Viewer",
+        "viewType": "officeFileViewer.pptx",
+        "displayName": "Office File Viewer (PowerPoint)",
         "selector": [
           {
             "filenamePattern": "*.pptx"
@@ -73,8 +73,8 @@
         "priority": "default"
       },
       {
-        "viewType": "betterofficeViewer.vsdx",
-        "displayName": "BetterOffice Visio Viewer",
+        "viewType": "officeFileViewer.vsdx",
+        "displayName": "Office File Viewer (Visio)",
         "selector": [
           {
             "filenamePattern": "*.vsdx"
@@ -85,27 +85,27 @@
     ],
     "commands": [
       {
-        "command": "betterofficeViewer.getDiagnostics",
-        "title": "BetterOffice Viewer: Show Diagnostics"
+        "command": "officeFileViewer.getDiagnostics",
+        "title": "Office File Viewer: Show Diagnostics"
       },
       {
-        "command": "betterofficeViewer.reload",
-        "title": "BetterOffice Viewer: Reload Active Viewer"
+        "command": "officeFileViewer.reload",
+        "title": "Office File Viewer: Reload Active Viewer"
       },
       {
-        "command": "betterofficeViewer.copyDiagnostics",
-        "title": "BetterOffice Viewer: Copy Diagnostics to Clipboard"
+        "command": "officeFileViewer.copyDiagnostics",
+        "title": "Office File Viewer: Copy Diagnostics to Clipboard"
       }
     ],
     "configuration": {
-      "title": "BetterOffice Viewer",
+      "title": "Office File Viewer",
       "properties": {
-        "betterofficeViewer.editing": {
+        "officeFileViewer.editing": {
           "type": "boolean",
           "default": true,
           "description": "Open OOXML files editable (editing ships in a later milestone; reserved)."
         },
-        "betterofficeViewer.fonts": {
+        "officeFileViewer.fonts": {
           "type": "string",
           "enum": [
             "bundled",
@@ -114,16 +114,16 @@
           "default": "bundled",
           "description": "Use bundled metric-compatible fonts for Office-accurate layout. 'off' uses system fonts only."
         },
-        "betterofficeViewer.cjkFonts": {
+        "officeFileViewer.cjkFonts": {
           "type": "string",
           "enum": [
             "off",
             "cdn"
           ],
           "default": "off",
-          "description": "Fetch CJK font faces from the pinned betteroffice CDN. This is the only network access the extension can perform."
+          "description": "Fetch CJK font faces from the pinned open-source font CDN (jsDelivr). This is the only network access the extension can perform."
         },
-        "betterofficeViewer.initialZoom": {
+        "officeFileViewer.initialZoom": {
           "type": "string",
           "enum": [
             "fitPage",
@@ -133,7 +133,7 @@
           "default": "fitPage",
           "description": "Initial zoom applied when a viewer opens."
         },
-        "betterofficeViewer.forceReadOnly": {
+        "officeFileViewer.forceReadOnly": {
           "type": "boolean",
           "default": false,
           "description": "Always open documents read-only, regardless of the editing setting."

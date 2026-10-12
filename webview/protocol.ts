@@ -46,5 +46,5 @@ export type WebviewToHost =
  *   webview -> host: { type: 'saved'; bytes: ArrayBuffer }
  *   host -> webview: { type: 'requestSave' }
  *   host -> webview: { type: 'undo' } | { type: 'redo' }
- *   host -> worker:  { type: 'bo-assets'; assets: Record<string, ArrayBuffer> }  // bootstrap handshake (§4.2)
+ *   host -> worker:  { type: 'ext-assets'; assets: Record<string, ArrayBuffer> }  // bootstrap handshake (§4.2)
  */

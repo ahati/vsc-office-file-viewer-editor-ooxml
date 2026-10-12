@@ -8,29 +8,29 @@
  * resources from a worker context at all (microsoft/vscode#315494). So:
  *
  *   1. the webview main thread fetched every wasm/ttf byte (`assetBootstrap.ts`) and posted them as
- *      the worker's first message: `{ type: 'bo-assets', assets: Record<name, ArrayBuffer> }`,
+ *      the worker's first message: `{ type: 'ext-assets', assets: Record<name, ArrayBuffer> }`,
  *   2. the build rewrote the engines' `new URL('<file>.wasm', import.meta.url)` lookups into
- *      `__boAssetUrl(name)` calls (scripts/build.mjs, `asset-import-rewrite`); here that global maps
- *      the basename to a `bo-asset://` URL,
+ *      `__extAssetUrl(name)` calls (scripts/build.mjs, `asset-import-rewrite`); here that global maps
+ *      the basename to a `ext-asset://` URL,
  *   3. the patched `fetch` serves those URLs from the message payload — no network, no
  *      service-worker, no import of a webview resource.
  *
- * Ordering is not assumed: `fetch('bo-asset://…')` before the message arrives parks on a pending
+ * Ordering is not assumed: `fetch('ext-asset://…')` before the message arrives parks on a pending
  * queue that the message handler drains. Engine client messages (`warm`/`open`) are ignored.
  *
  * Everything is defensive: if the host never posts assets, the fetches stay pending (the engine
- * surfaces its own timeout) and non-`bo-asset://` requests keep using the original fetch.
+ * surfaces its own timeout) and non-`ext-asset://` requests keep using the original fetch.
  */
 
 /** Payload of the host -> worker asset handshake message (§4.2). */
-export interface BoAssetsMessage {
-	type: 'bo-assets';
+export interface ExtAssetsMessage {
+	type: 'ext-assets';
 	assets: Record<string, ArrayBuffer>;
 }
 
-export const BO_ASSET_SCHEME = 'bo-asset://';
+export const EXT_ASSET_SCHEME = 'ext-asset://';
 
-/** Basename -> bytes, filled by the first `bo-assets` message. */
+/** Basename -> bytes, filled by the first `ext-assets` message. */
 const assetBytes = new Map<string, ArrayBuffer>();
 /** Resolvers parked while waiting for the message (fetch-before-message ordering). */
 let pending: Array<() => void> = [];
@@ -45,12 +45,12 @@ function waitForAssets(): Promise<void> {
 }
 
 function isBoAssetUrl(url: string): boolean {
-	return url.startsWith(BO_ASSET_SCHEME);
+	return url.startsWith(EXT_ASSET_SCHEME);
 }
 
 /** Strips the scheme, any query/hash fragment and percent-encoding to recover the file basename. */
 function assetNameFromUrl(url: string): string {
-	const withoutScheme = url.slice(BO_ASSET_SCHEME.length).split(/[?#]/, 1)[0] ?? '';
+	const withoutScheme = url.slice(EXT_ASSET_SCHEME.length).split(/[?#]/, 1)[0] ?? '';
 	try {
 		return decodeURIComponent(withoutScheme);
 	} catch {
@@ -71,7 +71,7 @@ function contentTypeFor(name: string): string {
 function respond(name: string): Response {
 	const bytes = assetBytes.get(name);
 	if (!bytes) {
-		return new Response(`[betteroffice-viewer] asset "${name}" was not seeded into the engine worker`, {
+		return new Response(`[office-file-viewer] asset "${name}" was not seeded into the engine worker`, {
 			status: 404,
 			statusText: 'Not Found',
 			headers: { 'Content-Type': 'text/plain' },
@@ -93,7 +93,7 @@ function inputUrl(input: RequestInfo | URL): string {
 	return typeof request?.url === 'string' ? request.url : String(input);
 }
 
-/** Builds the `Response` for a `bo-asset://` URL, parking until the payload arrives if needed. */
+/** Builds the `Response` for a `ext-asset://` URL, parking until the payload arrives if needed. */
 function assetResponse(url: string): Promise<Response> {
 	const name = assetNameFromUrl(url);
 	if (assetBytes.has(name)) return Promise.resolve(respond(name));
@@ -128,8 +128,8 @@ function installFetchShim(): void {
 
 function installMessageHandler(): void {
 	const onMessage = (event: MessageEvent): void => {
-		const data = event.data as BoAssetsMessage | undefined;
-		if (!data || data.type !== 'bo-assets' || typeof data.assets !== 'object' || data.assets === null) {
+		const data = event.data as ExtAssetsMessage | undefined;
+		if (!data || data.type !== 'ext-assets' || typeof data.assets !== 'object' || data.assets === null) {
 			// Engine client messages (`warm`, `open`, `sync`, …) — always ignored here.
 			return;
 		}
@@ -154,11 +154,11 @@ function installMessageHandler(): void {
 // --- top-level install ---------------------------------------------------------------
 // esbuild evaluates this module before the engine worker module bundled after it, so both the
 // globals and the fetch shim exist before any rewritten lookup runs.
-globalThis.__boAssetUrl = (name: string) => BO_ASSET_SCHEME + name;
-globalThis.__boWorkerUrl = (logical: string) => {
+globalThis.__extAssetUrl = (name: string) => EXT_ASSET_SCHEME + name;
+globalThis.__extWorkerUrl = (logical: string) => {
 	// Workers cannot spawn engine workers (engines have no such path); surface it loudly if it ever
 	// happens instead of returning an unusable URL.
-	throw new Error(`[betteroffice-viewer] worker context cannot resolve engine worker "${logical}"`);
+	throw new Error(`[office-file-viewer] worker context cannot resolve engine worker "${logical}"`);
 };
 
 installFetchShim();
@@ -169,7 +169,7 @@ export function getSeededAssetNames(): string[] {
 	return [...assetBytes.keys()];
 }
 
-/** True once the `bo-assets` payload has been received. */
+/** True once the `ext-assets` payload has been received. */
 export function hasSeededAssets(): boolean {
 	return announced;
 }

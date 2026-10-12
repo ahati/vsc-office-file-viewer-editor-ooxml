@@ -6,7 +6,7 @@
  *
  * vsdx runs on the webview main thread (no engine worker, DESIGN §4.2):
  *
- *   bootstrap(config, mediaBase)   manifest-driven asset resolution (`__boAssetUrl`, fonts)
+ *   bootstrap(config, mediaBase)   manifest-driven asset resolution (`__extAssetUrl`, fonts)
  *   wasm bytes (bootstrap cache) -> initWasm(wasmBytes)
  *   loadVsdxFonts(config)          four Arial style variants (SCOPING §6)
  *   openDiagram(fileBytes, {fonts}) -> mountVsdxShell(...).renderInitial()
@@ -31,7 +31,7 @@ import { initWasm, openDiagram, type DiagramHandle } from '../../vendor/betterof
 const FORMAT = 'vsdx' as const;
 /** Manifest key of the compiled vsdx wasm module (scripts/build.mjs emits assets as `assets/<name>`). */
 const WASM_ASSET_NAME = 'vsdx_wasm_bg.wasm';
-/** Any URL scheme that is not fetchable (`bo-asset://`, `bo-missing-asset://`, ...). */
+/** Any URL scheme that is not fetchable (`ext-asset://`, `ext-missing-asset://`, ...). */
 const NON_FETCHABLE_URL = /^(?!https?:|blob:|data:)[a-z][a-z0-9+.-]*:/i;
 const STATE_DEBOUNCE_MS = 250;
 
@@ -74,7 +74,7 @@ function post(message: WebviewToHost): void {
 /** Reports a phase failure to the host and swaps the viewer root for the fatal panel. */
 function reportError(phase: VsdxErrorPhase, error: unknown): void {
 	const message = error instanceof Error ? error.message || error.name : String(error);
-	console.error(`[betteroffice-viewer] vsdx ${phase} failed`, error);
+	console.error(`[office-file-viewer] vsdx ${phase} failed`, error);
 	const root = document.getElementById('viewer-root');
 	if (root) showFatalError(root, phase, message);
 	post({ type: 'load-error', phase, message });
@@ -98,12 +98,12 @@ function closeSession(): void {
 	try {
 		active.shell.dispose();
 	} catch (error) {
-		console.warn('[betteroffice-viewer] vsdx shell dispose failed', error);
+		console.warn('[office-file-viewer] vsdx shell dispose failed', error);
 	}
 	try {
 		active.handle.dispose();
 	} catch (error) {
-		console.warn('[betteroffice-viewer] vsdx handle dispose failed', error);
+		console.warn('[office-file-viewer] vsdx handle dispose failed', error);
 	}
 }
 
@@ -122,7 +122,7 @@ function disposeViewer(): void {
 function resolveWasmUrl(): string | undefined {
 	const fromBootstrap = bootstrapModule.getAssetUrl?.(WASM_ASSET_NAME);
 	if (typeof fromBootstrap === 'string' && fromBootstrap.length > 0) return fromBootstrap;
-	const fromGlobal = globalThis.__boAssetUrl?.(WASM_ASSET_NAME);
+	const fromGlobal = globalThis.__extAssetUrl?.(WASM_ASSET_NAME);
 	return typeof fromGlobal === 'string' && fromGlobal.length > 0 ? fromGlobal : undefined;
 }
 
@@ -187,7 +187,7 @@ async function load(init: InitMessage, options: { bootstrap: boolean }): Promise
 		const fontsMark = performance.now();
 		const { fonts, warnings } = await loadVsdxFonts(init.config);
 		timings.fontsMs = roundMs(performance.now() - fontsMark);
-		for (const warning of warnings) console.warn(`[betteroffice-viewer] vsdx fonts: ${warning}`);
+		for (const warning of warnings) console.warn(`[office-file-viewer] vsdx fonts: ${warning}`);
 		if (token !== loadToken || disposed) return;
 		const openMark = performance.now();
 		handle = openDiagram(fileBytes, { fonts });
@@ -232,7 +232,7 @@ async function load(init: InitMessage, options: { bootstrap: boolean }): Promise
 		try {
 			handle.dispose();
 		} catch (disposeError) {
-			console.warn('[betteroffice-viewer] vsdx handle dispose failed', disposeError);
+			console.warn('[office-file-viewer] vsdx handle dispose failed', disposeError);
 		}
 		reportError('render', error);
 	}
@@ -275,5 +275,5 @@ function main(): void {
 try {
 	main();
 } catch (error) {
-	console.error('[betteroffice-viewer] vsdx entry failed to start', error);
+	console.error('[office-file-viewer] vsdx entry failed to start', error);
 }

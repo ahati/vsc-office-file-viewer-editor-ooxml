@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Build pipeline for the BetterOffice Viewer extension.
+ * Build pipeline for the Office File Editor & Viewer extension.
  *
  * Targets
  *   host     src/extension.ts                    -> out/extension.js        (CJS, node, external: vscode)
@@ -11,8 +11,8 @@
  *
  * Plugins
  *   asset-import-rewrite  rewrites the engines' `new URL('<literal>', import.meta.url)` asset/worker
- *                         lookups (they cannot survive an IIFE webview bundle) into `__boAssetUrl(name)`
- *                         / `__boWorkerUrl(logical)` global lookups resolved from out/media/manifest.json.
+ *                         lookups (they cannot survive an IIFE webview bundle) into `__extAssetUrl(name)`
+ *                         / `__extWorkerUrl(logical)` global lookups resolved from out/media/manifest.json.
  *   vsdx-generated-stub   keeps the build green before `npm run build:vsdx-wasm` has produced
  *                         vendor/betteroffice/vsdx/src/wasm/generated/vsdx_wasm.js.
  *
@@ -77,8 +77,8 @@ const VSDX_WASM_DTS = 'vendor/betteroffice/vsdx/src/wasm/generated/vsdx_wasm.d.t
  * an IIFE webview bundle (and VS Code webviews may not fetch from a worker context at all), so the
  * expression is replaced with a global lookup:
  *
- *   new URL('../assets/X.ttf', import.meta.url)        -> __boAssetUrl("X.ttf", <static import>)
- *   new URL('./residentEngineWorker.mjs', import.meta.url) -> __boWorkerUrl("docx")
+ *   new URL('../assets/X.ttf', import.meta.url)        -> __extAssetUrl("X.ttf", <static import>)
+ *   new URL('./residentEngineWorker.mjs', import.meta.url) -> __extWorkerUrl("docx")
  *
  * A static `import` of the asset is injected alongside the rewrite so esbuild actually emits the
  * bytes under out/media/assets/ and the manifest generator can see them. The imported URL is passed
@@ -113,10 +113,10 @@ const assetImportRewrite = {
 						if (!logical) {
 							// Unknown module worker: fall back to an asset lookup so no
 							// `new URL(..., import.meta.url)` survives the bundle.
-							return `__boAssetUrl(${JSON.stringify(base)})`;
+							return `__extAssetUrl(${JSON.stringify(base)})`;
 						}
 						emittedWorkers.add(logical);
-						return `__boWorkerUrl(${JSON.stringify(logical)})`;
+						return `__extWorkerUrl(${JSON.stringify(logical)})`;
 					}
 
 					if (!ASSET_EXTENSIONS.has(extension)) return match;
@@ -124,11 +124,11 @@ const assetImportRewrite = {
 					const resolved = path.resolve(path.dirname(args.path), specifier);
 					let identifier = identifiers.get(resolved);
 					if (!identifier) {
-						identifier = `__boAsset${identifiers.size}`;
+						identifier = `__extAsset${identifiers.size}`;
 						identifiers.set(resolved, identifier);
 					}
 					changed = true;
-					return `__boAssetUrl(${JSON.stringify(base)}, ${identifier})`;
+					return `__extAssetUrl(${JSON.stringify(base)}, ${identifier})`;
 				},
 			);
 
@@ -258,7 +258,7 @@ const workerEntries = ['docx'].map((format) => ({
 
 /**
  * Engine workers are self-contained IIFE bundles: everything the worker module reaches (chunks,
- * fonts) is inlined, and its wasm lookups are rewritten to `__boAssetUrl(...)` calls served by the
+ * fonts) is inlined, and its wasm lookups are rewritten to `__extAssetUrl(...)` calls served by the
  * `workerFetchShim` preamble from bytes posted by the webview main thread.
  *
  * `assetNames` points at the sibling `out/media/assets` directory so worker builds and webview
@@ -443,7 +443,7 @@ async function cleanStaleWorkerOutputs() {
 /**
  * Guards the worker contract: self-contained bundles must not contain runtime relative-URL lookups
  * for wasm/workers and must not contain dynamic imports (both break inside blob: webview workers),
- * and every worker must carry the `bo-assets` preamble handshake (`workerFetchShim.ts`).
+ * and every worker must carry the `ext-assets` preamble handshake (`workerFetchShim.ts`).
  */
 async function verifyWorkerBundles() {
 	const problems = [];
@@ -460,8 +460,8 @@ async function verifyWorkerBundles() {
 		if (/(^|[^\w.$])import\s*\(/.test(code)) {
 			problems.push(`${relPath} (${logical}): dynamic import() survived bundling`);
 		}
-		if (!code.includes('bo-assets')) {
-			problems.push(`${relPath} (${logical}): missing the 'bo-assets' fetch-shim handshake`);
+		if (!code.includes('ext-assets')) {
+			problems.push(`${relPath} (${logical}): missing the 'ext-assets' fetch-shim handshake`);
 		}
 	}
 	// A worker bundle emitted for a format whose package ships no worker means a stale entry file.

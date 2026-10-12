@@ -73,8 +73,8 @@ external-link allowlist (http/https/mailto/tel — ported), diagnostics output c
 (vsdx `exportPdf`/`exportSvg`), *Print* (docx ref.print / xlsx printDisplayList).
 
 **Settings (keep minimal):**
-- `betterofficeViewer.fonts`: `"bundled" | "off"` (default `bundled`) — `off` ships no font bytes at render time
-- `betterofficeViewer.cjkFonts`: `"off" | "cdn"` (default `off`) — opt-in network fetch of metric-compatible CJK faces
+- `officeFileViewer.fonts`: `"bundled" | "off"` (default `bundled`) — `off` ships no font bytes at render time
+- `officeFileViewer.cjkFonts`: `"off" | "cdn"` (default `off`) — opt-in network fetch of metric-compatible CJK faces
 - drop the old `enableTextSelection` / `xlsxShowZoomSlider` (now native to the editors)
 
 ---
