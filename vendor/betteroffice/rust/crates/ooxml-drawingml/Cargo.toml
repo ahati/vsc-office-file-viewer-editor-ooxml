@@ -1,0 +1,34 @@
+[package]
+name = "betteroffice-drawingml"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+publish = ["crates-io"]
+description = "Shared DrawingML colors, themes, shape models, and preset geometry."
+readme = "README.md"
+keywords = ["ooxml", "drawingml", "graphics", "office"]
+categories = ["graphics", "rendering", "data-structures"]
+
+[lib]
+name = "ooxml_drawingml"
+
+[features]
+default = []
+chart = []
+png = ["dep:flate2", "dep:crc32fast"]
+tiff = ["png", "dep:tiff", "dep:weezl"]
+
+[dependencies]
+indexmap = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+crc32fast = { version = "1", optional = true }
+flate2 = { version = "1", optional = true }
+tiff = { version = "0.11", default-features = false, features = ["lzw", "deflate"], optional = true }
+weezl = { version = "0.1", optional = true }
+
+[dev-dependencies]
+png = "0.18"
+proptest = "1"
+tiff = { version = "0.11" }

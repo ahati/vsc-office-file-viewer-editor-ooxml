@@ -1,0 +1,18 @@
+{
+	"compilerOptions": {
+		"module": "node16",
+		"moduleResolution": "node16",
+		"target": "ES2022",
+		"lib": ["ES2022"],
+		"types": ["node", "vscode"],
+		"strict": true,
+		"noEmit": true,
+		"rootDir": "src",
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true,
+		"noImplicitOverride": true,
+		"noUnusedLocals": true
+	},
+	"include": ["src"],
+	"exclude": ["node_modules", "out", ".vscode-test", "webview", "vendor"]
+}

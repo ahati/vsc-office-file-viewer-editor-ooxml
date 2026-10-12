@@ -1,0 +1,26 @@
+# Sources, build tooling and docs are not shipped: only out/** (including out/media/**) is.
+.vscode/**
+.github/**
+.pi/**
+src/**
+webview/**
+scripts/**
+docs/**
+vendor/**
+node_modules/**
+out/test/**
+target/**
+.gitignore
+.vscode-test/**
+rust-toolchain.toml
+**/*.map
+.git/**
+samples/**
+tsconfig*.json
+package-lock.json
+esbuild.mjs
+
+# Intentionally NOT ignored (required at runtime / by the license obligations):
+#   out/media/**            webview bundles, worker bundles, wasm/font assets, manifest.json
+#   LICENSE, NOTICE, THIRD-PARTY-NOTICES.md
+#   media/icon.png, package.json, README.md

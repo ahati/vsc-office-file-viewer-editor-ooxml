@@ -8,8 +8,11 @@ Technical design for the requirements in [`docs/PRD.md`](./PRD.md). Upstream ana
 ## 1. Overview
 
 A VS Code extension contributing **custom editors** for `docx/docm`, `xlsx/xlsm`, `pptx/pptm`, `vsdx`. Each editor is
-a webview running a BetterOffice engine. The engines are Rust compiled to WASM; docx/xlsx/pptx run their session in a
-dedicated **Web Worker**; vsdx runs on the webview main thread. The extension host stays thin: file I/O, lifecycle,
+a webview running a BetterOffice engine. The engines are Rust compiled to WASM. **Verified against the published npm
+dists**: only `@betteroffice/docx@0.4.3` ships an engine worker (`dist/yrs/residentEngineWorker.mjs`); the published
+`xlsx@0.3.0`/`pptx@0.2.0` dists contain no workers at all (the session workers exist only in the upstream monorepo
+sources and are not part of any release) — their sessions run **in-thread** on the webview main thread via
+`initWasm(bytes)`. vsdx (vendored) is main-thread by design. The extension host stays thin: file I/O, lifecycle,
 settings, diagnostics, save/backup orchestration.
 
 ```
@@ -24,15 +27,16 @@ settings, diagnostics, save/backup orchestration.
                 │ postMessage (structured clone / transfer)     │ asWebviewUri resources
 ┌───────────────▼────────────────── webview (iframe) ──────────▼───────────────┐
 │ entry-{format}.js (IIFE, nonce)                                               │
-│  assetBootstrap: fetch worker/wasm/font assets → blob URLs / ArrayBuffers     │
+│  assetBootstrap: fetch manifest/wasm/font assets → blob URL + byte maps       │
+│  xlsx/pptx/vsdx: initWasm(bytes) on main thread, then mount / paint           │
 │  React mount: DocxEditor | XlsxEditor | PptxEditor (readOnly|editable)        │
-│  vsdx: own canvas shell (initWasm → openDiagram → layoutPage → paintPage)     │
+│  vsdx: own canvas shell (openDiagram → layoutPage → paintPage)                │
 └───────────────┬───────────────────────────────────────────────────────────────┘
-                │ new Worker(blobUrl, {type:'module'})
-┌───────────────▼────────────────── engine worker ──────────────────────────────┐
-│ residentEngineWorker (docx, 4 wasm modules)                                   │
-│ xlsxSessionWorker / pptxSessionWorker (1 wasm each)                           │
-│  · wasm supplied as bytes via injected fetch shim (§4) — never fetched itself │
+                │ new Worker(blobUrl) — docx only; wrapper posts bo-assets first
+┌───────────────▼────────────────── engine worker (docx) ───────────────────────┐
+│ residentEngineWorker.mjs (bundled self-contained, fetch-shim preamble)        │
+│  · 4 wasm modules + font TTFs served from the injected bo-assets byte map     │
+│  · never fetches webview-resource URIs itself (avoids vscode#315494)          │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -152,22 +156,22 @@ relative to `import.meta.url`. In webviews: (a) workers must be blob/data URIs, 
 webview resources is broken on VS Code ≥ 1.119 (#315494), (c) wasm URLs have no override except `initWasm(bytes)`
 (xlsx/pptx/vsdx) and docx's worker-protocol host-module message (`ResidentEngineWorkerHostModule`).
 
-### 4.2 Design: self-contained workers + injected assets
+### 4.2 Design: in-thread engines + one self-contained worker (docx)
 
-1. **Worker bundling.** esbuild produces one self-contained IIFE per engine worker
-   (`out/media/workers/{residentEngine,xlsxSession,pptxSession}.js`): the worker entry imports the upstream worker
-   module; all chunk imports are inlined; `new URL('*.wasm', import.meta.url)` expressions inside are rewritten to
-   lookups in an injected manifest (§5.2).
-2. **Bootstrap preamble.** Our worker entries begin with `workerFetchShim.ts`: the worker waits for a first
-   `{type:'bo-assets', assets: Record<name, ArrayBuffer>}` postMessage, installs a `fetch`/`Request` shim that serves
-   those bytes for the manifest URLs, then continues with engine code. Consequence: the worker never performs a
-   network/service-worker request — the entire #315494 class is avoided **without patching engine sources**.
-3. **Webview main-thread fetch.** `assetBootstrap.ts` (runs before mounting) fetches, via `webview.asWebviewUri`
-   (main-thread fetch of webview resources is the supported path): worker bundles → `blob:` URLs; wasm files →
-   `ArrayBuffer`s; then posts the wasm byte map into the worker (shim) and/or calls `initWasm(bytes)` for vsdx.
-4. **docx preferred path (spike S1).** The docx worker protocol already carries a host-module message type. If it
-   accepts wasm `ArrayBuffer`s (expected), we skip the fetch shim for docx and supply modules through the protocol;
-   the shim remains the universal fallback.
+1. **xlsx / pptx / vsdx (no workers).** The published dists run in-thread. Our entry calls `initWasm(bytes)` with
+   bytes fetched via `webview.asWebviewUri` (main-thread fetch of webview resources is the supported path) *before*
+   mounting, so the engines' memoized init reuses them and no default-URL fetch path is ever exercised.
+2. **docx worker bundling.** esbuild produces one self-contained IIFE (`out/media/workers/worker-docx.js`): the
+   worker entry imports `workerFetchShim.ts` first, then upstream `residentEngineWorker.mjs`; all chunk imports are
+   inlined; `new URL('*.wasm', import.meta.url)` expressions inside are rewritten to `__boAssetUrl('<name>')`
+   lookups (§5).
+3. **Bootstrap preamble.** The shim defines `__boAssetUrl` to yield `bo-asset://<name>` URLs and patches `fetch` to
+   serve them from a byte map delivered by a first `{type:'bo-assets', assets}` message (with a pending-queue for
+   early fetches). Consequence: the worker never performs a network/service-worker request — the entire #315494 class
+   is avoided **without patching engine sources**.
+4. **Worker-constructor wrapper.** `assetBootstrap` wraps `self.Worker`: on construction it posts the byte map (all
+   wasm + font assets; FIFO port ordering guarantees it precedes any engine message). M1 ships the full asset map
+   (~54 MB, zero-copy transfer); lazy per-asset request is a recorded optimization.
 5. **vsdx** runs on the main thread: `initWasm(bytes)` → `openDiagram(bytes, {fonts})`; no worker involved.
 
 Instantiate with `instantiateStreaming` when `Content-Type: application/wasm` is present, fallback to
@@ -188,7 +192,7 @@ service-worker state, microsoft/vscode#318660).
 |---|---|---|---|
 | host | `src/extension.ts` | `out/extension.js` (CJS, external: vscode) | |
 | webview | `webview/entries/{docx,xlsx,pptx,vsdx}.ts` | `out/media/webview-{format}.js` (IIFE, es2020) | React 19 + engine adapters inlined; docx also imports `@betteroffice/docx-react/styles.css` → emitted `webview-docx.css` |
-| workers | upstream worker modules via `webview/entries/worker-{...}.ts` wrappers | `out/media/workers/*.js` (IIFE, single file) | chunk-inlined, no dynamic imports remain |
+| workers | upstream `residentEngineWorker.mjs` via `webview/entries/worker-docx.ts` | `out/media/workers/worker-docx.js` (IIFE, single file) | chunk-inlined, fetch-shim first, no dynamic imports remain (xlsx/pptx need no workers — §4.2) |
 | vendored vsdx | `vendor/betteroffice/vsdx` via tsup config mirrored from upstream | `out/media/vendor/vsdx/index.js` + copied `vsdx_wasm_bg.wasm` | §7 |
 
 **Plugins:**
@@ -347,7 +351,7 @@ shape data, CJK labels, 2000+ shape page for budget rules).
 
 | # | Risk | Mitigation |
 |---|---|---|
-| D1 | Spike S1 fails (docx worker rejects wasm bytes via host module) | fetch-shim fallback (§4.2.2) — engine-source-free, already the universal path |
+| D1 | docx worker asset injection regresses on a future VS Code release | fetch-shim + Worker-wrapper design keeps the worker fully offline from webview resources; compat matrix on insiders catches it pre-release (§4.2) |
 | D2 | New VS Code webview service-worker regressions | self-contained workers avoid the broken path entirely; compat matrix on insiders; error panel names the phase |
 | D3 | Vendored vsdx drifts from upstream | vendorguard plugin + sync procedure in `vendor/README.md`; mechanical npm swap when upstream publishes |
 | D4 | docx edit-wasm (20 MB) cold-open latency | budgeted in N1; progress UI; optional future: split parse-only viewer path (parse wasm 5.3 MB) if telemetry-free diagnostics show budget misses |

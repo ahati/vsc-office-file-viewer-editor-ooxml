@@ -1,0 +1,14 @@
+# Toolchain for the vendored VSDX Rust closure (vendor/betteroffice/rust).
+#
+# Upstream (openooxml/betteroffice@57fc1984) does not pin rustc — CI there uses whatever
+# `stable` resolves to, which makes the emitted vsdx_wasm_bg.wasm non-reproducible over time
+# (SCOPING R3). We pin the channel and the wasm target instead, so the wasm artifact is a
+# function of the vendored sources + this file + the pinned wasm-pack/binaryen versions
+# (see scripts/build-vsdx-wasm.mjs). 1.97.1 is the stable release the snapshot was verified
+# against (`rustc 1.97.1 (8bab26f4f 2026-07-14)`) and the edition-2024 workspace needs >= 1.85.
+#
+# Note: this file also applies to `cargo metadata`/`cargo build` run anywhere inside the repo,
+# including the vendored workspace at vendor/betteroffice/rust.
+[toolchain]
+channel = "1.97.1"
+targets = ["wasm32-unknown-unknown"]

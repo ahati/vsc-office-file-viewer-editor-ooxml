@@ -1,0 +1,29 @@
+[package]
+name = "betteroffice-opc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+publish = ["crates-io"]
+description = "OPC (OOXML zip) container reader/writer with zip-bomb and path-traversal guards enforced by construction."
+readme = "README.md"
+keywords = ["ooxml", "opc", "office", "zip", "docx"]
+categories = ["parser-implementations", "compression", "encoding"]
+
+[lib]
+name = "ooxml_opc"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+wasm = ["dep:wasm-bindgen", "dep:js-sys"]
+
+[dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+quick-xml = "0.41"
+zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

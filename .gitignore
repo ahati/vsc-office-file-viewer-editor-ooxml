@@ -1,0 +1,7 @@
+node_modules/
+out/
+*.vsix
+.vscode-test/
+
+# Rust/wasm-pack build output (vsdx vendored engine)
+target/

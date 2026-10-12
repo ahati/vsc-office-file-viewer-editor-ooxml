@@ -31,8 +31,8 @@ the only existing vsdx viewer has 446 installs and self-documented fidelity gaps
 | Package | npm | Unpacked | WASM modules (raw) | Worker |
 |---|---|---|---|---|
 | `@betteroffice/docx` 0.4.3 | ✅ | 31.3 MB | edit 20.3 MB · parse 5.3 MB · layout 4.2 MB · opc 0.35 MB | `residentEngineWorker.mjs` (module worker) |
-| `@betteroffice/xlsx` 0.3.0 | ✅ | 5.3 MB | 5.2 MB | `xlsxSessionWorker.mjs` |
-| `@betteroffice/pptx` 0.2.0 | ✅ | 5.6 MB | 5.4 MB | `pptxSessionWorker.mjs` |
+| `@betteroffice/xlsx` 0.3.0 | ✅ | 5.3 MB | 5.2 MB | none in published dist — in-thread (session worker exists only in monorepo sources) |
+| `@betteroffice/pptx` 0.2.0 | ✅ | 5.6 MB | 5.4 MB | none in published dist — in-thread (session worker exists only in monorepo sources) |
 | `@betteroffice/vsdx` 0.1.0 | ❌ private | ~0.3 MB TS + wasm | ~5–6 MB (est.; single module, raster feature) | none (main-thread) |
 | `@betteroffice/fonts` 0.4.0 | ✅ | 15 MB | — (TTF assets) | — |
 
@@ -96,11 +96,13 @@ extension host (node)                      webview (browser context)
 
 VS Code docs require workers to be loaded from `data:`/`blob:` URIs, and **module workers that `import()`/fetch
 webview-resource URIs are broken since VS Code 1.119** (open bug [`microsoft/vscode#315494`](https://github.com/microsoft/vscode/issues/315494),
-regression from PR #311844). All three engine workers are exactly that shape: `new Worker(new URL('./x.mjs', import.meta.url), {type:'module'})`
+regression from PR #311844). **Verified against the published npm dists:** only docx ships a worker
+(`residentEngineWorker.mjs`, that exact shape); the published xlsx/pptx dists contain no workers and no `new Worker`
+at all — their sessions run in-thread on the main thread via `initWasm(bytes)`. The docx worker is
 with relative chunk imports.
 
 **Decision: fully self-contained workers.**
-1. esbuild bundles each engine worker (`residentEngineWorker`, `xlsxSessionWorker`, `pptxSessionWorker`) as a **separate
+1. esbuild bundles the docx engine worker (`residentEngineWorker`) as a **separate
    single-file IIFE entry** (chunks inlined, wasm-import specifiers rewritten to `import` of emitted assets — the same
    rewrite plugin the predecessor already has, extended with a worker-URL rewrite).
 2. The webview entry `fetch()`es the worker bundle + all `.wasm` assets via `webview.asWebviewUri`, creates the worker

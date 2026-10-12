@@ -1,0 +1,1117 @@
+//! Run preparation: validate each run, resolve its font chain, segment it
+//! into same-font subranges, shape each subrange, and fold the shaped
+//! advances back onto the run's *original* characters with UTF-16 offsets.
+//!
+//! Everything downstream (the line filler) works on the per-character
+//! advance tables built here, so all UTF-8 ↔ UTF-16 and shaped-cluster ↔
+//! character conversion happens in exactly one place.
+//!
+//! The decisions this module owns:
+//!
+//! - **Which face each character gets.** The run's `w:rFonts` slots are
+//!   applied per character — complex script, East Asian, ASCII, high ANSI —
+//!   with combining marks inheriting the previous character's slot. The
+//!   complex slot also swaps in `w:bCs`, `w:iCs`, `w:szCs` and the `w:lang`
+//!   bidi tag. One OOXML run can therefore legitimately span Latin, East
+//!   Asian and complex faces without splitting its source positions.
+//! - **What is shaped in place of what.** `w:caps` uppercases before shaping,
+//!   honouring the Turkish and Azerbaijani dotted-I rules, and may expand one
+//!   character into several (ß → SS). `w:smallCaps` prefers a real `smcp`
+//!   substitution and otherwise synthesizes uppercase at a scaled advance.
+//!   `w:w` multiplies every advance and `w:kern` gates pair kerning.
+//! - **Where shaping segments.** A segment continues while font, advance
+//!   scale, UBA level, size, baseline shift, language and feature list all
+//!   hold, so kerning and ligatures survive inside it. Splitting at a level
+//!   boundary keeps every segment a single directional run, which is what
+//!   lets the resolved direction be passed to the shaper explicitly.
+//! - **Where lines may break.** UAX-14 opportunities over the original text,
+//!   translated to cluster indices. The trivial end-of-text opportunity is
+//!   dropped; interior mandatory breaks cannot occur, because control
+//!   characters are refused up front.
+//! - **How images flow.** An anchored floating image is skipped, a
+//!   `topAndBottom` or block image takes its own line, everything else is
+//!   inline. A dimensionless image is zero-size, never a refusal.
+
+use crate::auto_space::AutoSpace;
+use crate::caps::{
+    BROWSER_SMALL_CAPS_ADVANCE_SCALE, WORD_SMALL_CAPS_ADVANCE_SCALE, uppercase_for_language,
+};
+use crate::font_store::{FontId, FontStore};
+use crate::line_break::break_opportunities;
+use crate::shape::{ShapeDirection, ShapeFeature, shape_with_direction, shape_with_properties};
+use crate::word_metrics::{kern_enabled, kern_features};
+
+use super::font_slots::{FontSlot, char_slot};
+use super::input::{MeasureRequest, RunIn, validate_pt_size};
+use super::{MAX_RUN_TEXT_BYTES, MeasureError, pt_to_px};
+
+/// Longest fallback chain a run keeps resolved per slot. Chains past it are
+/// rebuilt per character instead, so keeping them can never cost more memory
+/// than resolving them did. Not a limit on input: nothing is refused.
+const MAX_KEPT_CHAIN_IDS: usize = 64;
+
+/// One indivisible shaped cluster of a run. A cluster may cover several
+/// source characters (ligature or combining sequence), so every downstream
+/// wrap/hit boundary is cluster-safe by construction.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct CharAdv {
+    /// UTF-16 code-unit offset of this cluster in the original text.
+    pub utf16_offset: u32,
+    /// UTF-16 code units covered by the complete shaped cluster.
+    pub utf16_len: u32,
+    pub advance: f32,
+    pub is_space: bool,
+    /// ASCII space or U+3000: trailing instances ignore wrap fit, never justify-compressed.
+    pub is_fit_space: bool,
+    pub level: u8,
+    pub logical_order: u32,
+    pub font_size_pt: f32,
+    pub metrics_font: FontId,
+    pub baseline_shift_px: f32,
+}
+
+/// A text run ready for line filling.
+#[derive(Debug, Clone)]
+pub(super) struct PreparedText {
+    pub chars: Vec<CharAdv>,
+    /// Total UTF-16 length of the original text.
+    pub utf16_len: u32,
+    /// Character indices (into `chars`) where a line may break — i.e. the
+    /// next line would start at that character. UAX-14 opportunities,
+    /// excluding the trivial end-of-text one.
+    pub breaks: Vec<usize>,
+    pub letter_spacing: f32,
+    /// Points used for line-metric bookkeeping.
+    pub font_size_pt: f32,
+    /// Font whose tables drive this run's line metrics.
+    pub metrics_font: FontId,
+    pub baseline_shift_px: f32,
+}
+
+/// Tab run prepared for grid placement and line metrics. Its width is not
+/// known until fill time — it depends on the line's current x — but its font
+/// already contributes to line metrics.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PreparedTab {
+    /// Points, for line-metrics bookkeeping.
+    pub font_size_pt: f32,
+    /// Head of the run's fallback chain (metrics source).
+    pub metrics_font: FontId,
+    pub bidi_level: u8,
+}
+
+/// Field run measured from its cached display text; the live value is
+/// substituted at paint time.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PreparedField {
+    pub width: f32,
+    /// Points, for line-metrics bookkeeping.
+    pub font_size_pt: f32,
+    /// Head of the run's fallback chain (metrics source).
+    pub metrics_font: FontId,
+    pub baseline_shift_px: f32,
+    pub bidi_level: u8,
+}
+
+/// Image dimensions and wrap distances.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PreparedImage {
+    pub width: f32,
+    pub height: f32,
+    pub dist_top: f32,
+    pub dist_bottom: f32,
+    pub bidi_level: u8,
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum PreparedRun {
+    Text(PreparedText),
+    LineBreak,
+    Tab(PreparedTab),
+    Field(PreparedField),
+    InlineImage(PreparedImage),
+    /// Authored-size image occupying its own line.
+    OwnLineImage(PreparedImage),
+    /// Anchored floating image: the host positions it, so it contributes no
+    /// width and no line growth — but its declared width still counts toward
+    /// the following-runs width after a tab.
+    SkippedImage {
+        width: f32,
+        bidi_level: u8,
+    },
+    /// Hidden text retains its logical span but has no layout footprint.
+    Hidden {
+        utf16_len: u32,
+    },
+}
+
+/// Characters that UAX-14 treats as mandatory breaks (plus tab, which DOCX
+/// represents as a `TabRun`). Their appearance inside a text run means the
+/// block needs the host fallback.
+fn is_disallowed_control(c: char) -> bool {
+    matches!(
+        c,
+        '\n' | '\r' | '\t' | '\u{000b}' | '\u{000c}' | '\u{0085}' | '\u{2028}' | '\u{2029}'
+    )
+}
+
+/// Per-char UBA embedding level for `text` under `base`, in logical order.
+/// Levels drive shaping segmentation and direction (a shaped segment must be
+/// a single directional run); line
+/// breaking, spans, and widths all stay in logical order.
+fn char_levels(text: &str, base: crate::bidi::BaseDirection) -> Vec<u8> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let paras = crate::bidi::bidi_paragraphs(text, base);
+    let mut runs = paras.iter().flat_map(|p| p.runs.iter());
+    let mut cur = runs.next();
+    let mut levels = Vec::new();
+    for (byte, _) in text.char_indices() {
+        while let Some(r) = cur {
+            if byte < r.end {
+                break;
+            }
+            cur = runs.next();
+        }
+        levels.push(cur.map_or(0, |r| r.level));
+    }
+    levels
+}
+
+fn shape_direction(level: u8) -> ShapeDirection {
+    if crate::bidi::level_is_rtl(level) {
+        ShapeDirection::Rtl
+    } else {
+        ShapeDirection::Ltr
+    }
+}
+
+/// UBA base direction for a run's text: Word's `w:bidi` paragraph property
+/// and the run-level `w:rtl` flag both force an RTL base; otherwise LTR
+/// (a Word paragraph is LTR unless `bidi` is set — never first-strong).
+/// The base only affects neutral characters' levels, i.e. segmentation,
+/// never advance sums.
+fn base_direction(run_rtl: bool, input: &MeasureRequest<'_>) -> crate::bidi::BaseDirection {
+    if run_rtl || input.block.attrs.as_ref().is_some_and(|a| a.bidi) {
+        crate::bidi::BaseDirection::Rtl
+    } else {
+        crate::bidi::BaseDirection::Ltr
+    }
+}
+
+/// Rejects a chain naming an id the store does not hold. Unlike a missing
+/// chain this is [`MeasureError::Invalid`] — the host contradicted itself
+/// rather than merely omitting something.
+pub(super) fn validate_chain(store: &FontStore, chain: &[FontId]) -> Result<(), MeasureError> {
+    for &id in chain {
+        store.metrics(id).map_err(|_| {
+            MeasureError::Invalid(format!("unknown font id {} in chain", id.to_u32()))
+        })?;
+    }
+    Ok(())
+}
+
+/// Prepares every run of the block, preserving run indices one-to-one so the
+/// filler's spans address the input directly. Bidi levels are resolved across
+/// the whole paragraph first, since a run's neutrals depend on its neighbours.
+/// An unrecognized `kind` is refused.
+pub(super) fn prepare_runs(
+    store: &FontStore,
+    input: &MeasureRequest<'_>,
+) -> Result<Vec<PreparedRun>, MeasureError> {
+    let bidi_levels = paragraph_run_levels(input);
+    let mut prepared = Vec::with_capacity(input.block.runs.len());
+    for (run_index, run) in input.block.runs.iter().enumerate() {
+        let levels = bidi_levels.get(run_index).map(Vec::as_slice).unwrap_or(&[]);
+        let object_level = levels.first().copied().unwrap_or(0);
+        match run.kind.as_str() {
+            "lineBreak" => prepared.push(PreparedRun::LineBreak),
+            "text" if run.hidden => prepared.push(PreparedRun::Hidden {
+                utf16_len: run
+                    .text
+                    .as_deref()
+                    .unwrap_or("")
+                    .chars()
+                    .map(|c| c.len_utf16() as u32)
+                    .sum(),
+            }),
+            "text" => prepared.push(PreparedRun::Text(prepare_text_run(
+                store, input, run, levels,
+            )?)),
+            "tab" => prepared.push(PreparedRun::Tab(prepare_tab_run(
+                store,
+                input,
+                run,
+                object_level,
+            )?)),
+            "image" => prepared.push(prepare_image_run(run, object_level)?),
+            "horizontalRule" if run.hidden => prepared.push(PreparedRun::Hidden { utf16_len: 1 }),
+            "horizontalRule" => {
+                let mut rule = prepare_field_run(store, input, run, object_level)?;
+                rule.width = validate_image_dim(run.width.unwrap_or(0.0), "run.width")?;
+                prepared.push(PreparedRun::Field(rule));
+            }
+            "field" => prepared.push(PreparedRun::Field(prepare_field_run(
+                store,
+                input,
+                run,
+                object_level,
+            )?)),
+            other => {
+                return Err(MeasureError::Unsupported(format!("run kind {other:?}")));
+            }
+        }
+    }
+    apply_auto_space(input, &mut prepared);
+    Ok(prepared)
+}
+
+/// Widens the cluster before each East Asian / Latin boundary by the
+/// paragraph's auto-space (`w:autoSpaceDE` / `w:autoSpaceDN`). Boundaries
+/// straddle runs, so this walks the prepared paragraph once; anything that is
+/// not adjacent text — a tab, image, field, line break or hidden run — ends
+/// the adjacency rather than spacing across it.
+fn apply_auto_space(input: &MeasureRequest<'_>, prepared: &mut [PreparedRun]) {
+    let attrs = input.block.attrs.as_ref();
+    let auto = AutoSpace::from_options(
+        attrs.and_then(|a| a.auto_space_de),
+        attrs.and_then(|a| a.auto_space_dn),
+    );
+    if !auto.any() {
+        return;
+    }
+    let mut widen: Vec<(usize, usize, f32)> = Vec::new();
+    let mut previous: Option<(usize, usize, char, f32)> = None;
+    for (run_index, run) in prepared.iter().enumerate() {
+        let PreparedRun::Text(text) = run else {
+            previous = None;
+            continue;
+        };
+        let Some(source) = input
+            .block
+            .runs
+            .get(run_index)
+            .and_then(|run| run.text.as_deref())
+        else {
+            previous = None;
+            continue;
+        };
+        let offsets = utf16_chars(source);
+        let mut order: Vec<usize> = (0..text.chars.len()).collect();
+        order.sort_by_key(|&index| text.chars[index].utf16_offset);
+        for index in order {
+            let cluster = &text.chars[index];
+            let size_px = pt_to_px(cluster.font_size_pt);
+            let Some(first) = char_at(&offsets, cluster.utf16_offset) else {
+                previous = None;
+                continue;
+            };
+            let last =
+                char_before(&offsets, cluster.utf16_offset + cluster.utf16_len).unwrap_or(first);
+            if let Some((prev_run, prev_index, prev_char, prev_px)) = previous {
+                let extra = auto.extra_px(prev_char, first, prev_px, size_px);
+                if extra > 0.0 {
+                    widen.push((prev_run, prev_index, extra));
+                }
+            }
+            previous = Some((run_index, index, last, size_px));
+        }
+    }
+    for (run_index, cluster_index, extra) in widen {
+        if let Some(PreparedRun::Text(text)) = prepared.get_mut(run_index)
+            && let Some(cluster) = text.chars.get_mut(cluster_index)
+        {
+            cluster.advance += extra;
+        }
+    }
+}
+
+/// `(utf16 offset, char)` for every character of a run, ascending.
+fn utf16_chars(text: &str) -> Vec<(u32, char)> {
+    let mut offset = 0u32;
+    text.chars()
+        .map(|ch| {
+            let at = offset;
+            offset += ch.len_utf16() as u32;
+            (at, ch)
+        })
+        .collect()
+}
+
+fn char_at(offsets: &[(u32, char)], offset: u32) -> Option<char> {
+    offsets
+        .binary_search_by_key(&offset, |entry| entry.0)
+        .ok()
+        .map(|index| offsets[index].1)
+}
+
+fn char_before(offsets: &[(u32, char)], end: u32) -> Option<char> {
+    let index = offsets.partition_point(|entry| entry.0 < end);
+    index.checked_sub(1).map(|index| offsets[index].1)
+}
+
+/// Per-character UBA levels for every run, resolved over the paragraph's
+/// concatenated text so neutrals see their real context. Non-text runs stand
+/// in as one object-replacement character each. A run carrying `w:rtl`
+/// re-resolves on its own text under an RTL base instead.
+fn paragraph_run_levels(input: &MeasureRequest<'_>) -> Vec<Vec<u8>> {
+    let mut combined = String::new();
+    let mut spans = Vec::with_capacity(input.block.runs.len());
+    let mut char_cursor = 0usize;
+    for run in &input.block.runs {
+        let start = char_cursor;
+        if run.kind == "text" {
+            let text = run.text.as_deref().unwrap_or("");
+            combined.push_str(text);
+            char_cursor += text.chars().count();
+        } else {
+            // UBA object replacement preserves neutral inline objects in the
+            // surrounding paragraph context instead of defaulting level 0.
+            combined.push('\u{fffc}');
+            char_cursor += 1;
+        }
+        spans.push((start, char_cursor));
+    }
+    let base = if input.block.attrs.as_ref().is_some_and(|attrs| attrs.bidi) {
+        crate::bidi::BaseDirection::Rtl
+    } else {
+        crate::bidi::BaseDirection::Ltr
+    };
+    let combined_levels = char_levels(&combined, base);
+    input
+        .block
+        .runs
+        .iter()
+        .zip(spans)
+        .map(|(run, (start, end))| {
+            if run.kind == "text" && run.rtl {
+                char_levels(
+                    run.text.as_deref().unwrap_or(""),
+                    crate::bidi::BaseDirection::Rtl,
+                )
+            } else {
+                combined_levels.get(start..end).unwrap_or(&[]).to_vec()
+            }
+        })
+        .collect()
+}
+
+/// Resolves a tab run's font for line metrics.
+fn prepare_tab_run(
+    store: &FontStore,
+    input: &MeasureRequest<'_>,
+    run: &RunIn,
+    bidi_level: u8,
+) -> Result<PreparedTab, MeasureError> {
+    let font_size_pt = run.font_size.unwrap_or(input.defaults.font_size);
+    validate_pt_size(font_size_pt, "run.fontSize")?;
+    let family = run
+        .font_family
+        .as_deref()
+        .unwrap_or(&input.defaults.font_family);
+    let chain = input.chain_for(family, run.bold, run.italic)?;
+    validate_chain(store, &chain)?;
+    Ok(PreparedTab {
+        font_size_pt,
+        metrics_font: chain[0],
+        bidi_level,
+    })
+}
+
+/// Security clamp for file-derived image dimensions: finite, non-negative,
+/// bounded (never fed raw into line math).
+fn validate_image_dim(v: f32, name: &str) -> Result<f32, MeasureError> {
+    if v.is_finite() && (0.0..=100_000.0).contains(&v) {
+        Ok(v)
+    } else {
+        Err(MeasureError::Unsupported(format!("{name} out of range")))
+    }
+}
+
+/// Wrap distances may be authored negative in theory; clamp magnitude only.
+fn validate_image_dist(v: f32, name: &str) -> Result<f32, MeasureError> {
+    if v.is_finite() && v.abs() <= 100_000.0 {
+        Ok(v)
+    } else {
+        Err(MeasureError::Unsupported(format!("{name} out of range")))
+    }
+}
+
+/// Classifies an image run, in order: anchored and floating (`position` set
+/// plus a float display mode or a text-wrapping wrap type) → skipped;
+/// `topAndBottom` or block display → own-line; everything else → inline.
+/// Rotation bounds, where present, replace the declared width and height as
+/// the layout footprint. Missing dimensions mean zero size, never a refusal.
+fn prepare_image_run(run: &RunIn, bidi_level: u8) -> Result<PreparedRun, MeasureError> {
+    let wrap = run.wrap_type.as_deref();
+    let display = run.display_mode.as_deref();
+    // Square, tight, and through wrapping are floating.
+    let is_floating =
+        display == Some("float") || matches!(wrap, Some("square" | "tight" | "through"));
+    if run.position.is_some() && is_floating {
+        // Missing floating-image widths count as zero after tabs.
+        let width = validate_image_dim(
+            run.rotation_bounds
+                .as_ref()
+                .and_then(|b| b.width)
+                .or(run.width)
+                .unwrap_or(0.0),
+            "run.rotationBounds.width",
+        )?;
+        return Ok(PreparedRun::SkippedImage { width, bidi_level });
+    }
+
+    // Own-line wrap distances default to six pixels.
+    if wrap == Some("topAndBottom") || display == Some("block") {
+        return Ok(PreparedRun::OwnLineImage(PreparedImage {
+            width: validate_image_dim(
+                run.rotation_bounds
+                    .as_ref()
+                    .and_then(|b| b.width)
+                    .or(run.width)
+                    .unwrap_or(0.0),
+                "run.rotationBounds.width",
+            )?,
+            height: validate_image_dim(
+                run.rotation_bounds
+                    .as_ref()
+                    .and_then(|b| b.height)
+                    .or(run.height)
+                    .unwrap_or(0.0),
+                "run.rotationBounds.height",
+            )?,
+            dist_top: validate_image_dist(run.dist_top.unwrap_or(6.0), "run.distTop")?,
+            dist_bottom: validate_image_dist(run.dist_bottom.unwrap_or(6.0), "run.distBottom")?,
+            bidi_level,
+        }));
+    }
+
+    Ok(PreparedRun::InlineImage(PreparedImage {
+        width: validate_image_dim(
+            run.rotation_bounds
+                .as_ref()
+                .and_then(|b| b.width)
+                .or(run.width)
+                .unwrap_or(0.0),
+            "run.rotationBounds.width",
+        )?,
+        height: validate_image_dim(
+            run.rotation_bounds
+                .as_ref()
+                .and_then(|b| b.height)
+                .or(run.height)
+                .unwrap_or(0.0),
+            "run.rotationBounds.height",
+        )?,
+        dist_top: validate_image_dist(run.dist_top.unwrap_or(0.0), "run.distTop")?,
+        dist_bottom: validate_image_dist(run.dist_bottom.unwrap_or(0.0), "run.distBottom")?,
+        bidi_level,
+    }))
+}
+
+/// Measures a field at `fallback` (`"1"` when absent or empty) with the run's
+/// family, size, bold and italic. Caps flags and letter spacing do not apply
+/// to fields; super/subscript scaling does.
+fn prepare_field_run(
+    store: &FontStore,
+    input: &MeasureRequest<'_>,
+    run: &RunIn,
+    bidi_level: u8,
+) -> Result<PreparedField, MeasureError> {
+    let base_size_pt = run.font_size.unwrap_or(input.defaults.font_size);
+    validate_pt_size(base_size_pt, "run.fontSize")?;
+    let (font_size_pt, _) = script_metrics(base_size_pt, run);
+    let family = run
+        .font_family
+        .as_deref()
+        .unwrap_or(&input.defaults.font_family);
+    let chain = input.chain_for(family, run.bold, run.italic)?;
+    validate_chain(store, &chain)?;
+    // Missing and empty field fallbacks measure as `"1"`.
+    let fallback = match run.fallback.as_deref() {
+        Some(t) if !t.is_empty() => t,
+        _ => "1",
+    };
+    let width = measure_plain_text(
+        store,
+        &chain,
+        fallback,
+        pt_to_px(font_size_pt),
+        base_direction(run.rtl, input),
+    )?;
+    Ok(PreparedField {
+        width,
+        font_size_pt: base_size_pt,
+        metrics_font: chain[0],
+        baseline_shift_px: 0.0,
+        bidi_level,
+    })
+}
+
+/// Size and baseline shift for `w:vertAlign`: both scripts shape at 0.75 of
+/// the run's size, superscript raised 0.4em and subscript lowered 0.2em.
+fn script_metrics(base_size_pt: f32, run: &RunIn) -> (f32, f32) {
+    let base_px = pt_to_px(base_size_pt);
+    if run.superscript {
+        (base_size_pt * 0.75, base_px * 0.4)
+    } else if run.subscript {
+        (base_size_pt * 0.75, -base_px * 0.2)
+    } else {
+        (base_size_pt, 0.0)
+    }
+}
+
+/// First font in `chain` covering `ch`, or the chain's terminal font when
+/// nothing covers it. A truly uncovered character therefore shapes as that
+/// face's `.notdef` — a real advance width — instead of refusing the block.
+/// `None` only for an empty chain, which `validate_chain` rejects upstream.
+fn resolve_with_fallback(store: &FontStore, chain: &[FontId], ch: char) -> Option<FontId> {
+    store.resolve(chain, ch).or_else(|| chain.last().copied())
+}
+
+/// Width of `text` shaped plainly through `chain` — no caps, letter spacing
+/// or horizontal scale — for field fallbacks and list markers. Segments split
+/// at font and UBA level boundaries under `base`.
+pub(super) fn measure_plain_text(
+    store: &FontStore,
+    chain: &[FontId],
+    text: &str,
+    size_px: f32,
+    base: crate::bidi::BaseDirection,
+) -> Result<f32, MeasureError> {
+    if text.len() > MAX_RUN_TEXT_BYTES {
+        return Err(MeasureError::Unsupported(format!(
+            "text too long ({} bytes)",
+            text.len()
+        )));
+    }
+    if let Some(c) = text.chars().find(|&c| is_disallowed_control(c)) {
+        return Err(MeasureError::Unsupported(format!(
+            "control character U+{:04X} in text",
+            c as u32
+        )));
+    }
+
+    let levels = char_levels(text, base);
+    let mut plan: Vec<(char, FontId, u8)> = Vec::new();
+    for (i, ch) in text.chars().enumerate() {
+        let Some(font) = resolve_with_fallback(store, chain, ch) else {
+            return Err(MeasureError::Unsupported("empty font chain".to_string()));
+        };
+        plan.push((ch, font, levels[i]));
+    }
+
+    // shape maximal same-font single-level subranges and sum advances
+    let mut width = 0.0f32;
+    let mut seg_start = 0;
+    while seg_start < plan.len() {
+        let (_, font, level) = plan[seg_start];
+        let mut seg_end = seg_start + 1;
+        while seg_end < plan.len() && plan[seg_end].1 == font && plan[seg_end].2 == level {
+            seg_end += 1;
+        }
+        let seg_text: String = plan[seg_start..seg_end].iter().map(|&(c, ..)| c).collect();
+        let glyphs =
+            shape_with_direction(store, font, &seg_text, size_px, &[], shape_direction(level))
+                .map_err(|e| MeasureError::Invalid(format!("shaping failed: {e}")))?;
+        width += glyphs.iter().map(|g| g.x_advance).sum::<f32>();
+        seg_start = seg_end;
+    }
+    Ok(width)
+}
+
+/// Builds a text run's cluster advance table: validate and clamp the run's
+/// numbers, plan every character's face and casing, shape the resulting
+/// same-style subranges, fold glyph advances back onto original characters,
+/// and record the UAX-14 break opportunities.
+fn prepare_text_run(
+    store: &FontStore,
+    input: &MeasureRequest<'_>,
+    run: &RunIn,
+    resolved_levels: &[u8],
+) -> Result<PreparedText, MeasureError> {
+    let text = run.text.as_deref().unwrap_or("");
+    if text.len() > MAX_RUN_TEXT_BYTES {
+        return Err(MeasureError::Unsupported(format!(
+            "run text too long ({} bytes)",
+            text.len()
+        )));
+    }
+    if let Some(c) = text.chars().find(|&c| is_disallowed_control(c)) {
+        return Err(MeasureError::Unsupported(format!(
+            "control character U+{:04X} in run text",
+            c as u32
+        )));
+    }
+
+    let default_size_pt = run.font_size.unwrap_or(input.defaults.font_size);
+    validate_pt_size(default_size_pt, "run.fontSize")?;
+    if let Some(size) = run.font_size_cs {
+        validate_pt_size(size, "run.fontSizeCs")?;
+    }
+
+    let letter_spacing = run.letter_spacing.unwrap_or(0.0);
+    if !(letter_spacing.is_finite() && letter_spacing.abs() <= 1000.0) {
+        return Err(MeasureError::Unsupported(
+            "letterSpacing out of range".to_string(),
+        ));
+    }
+
+    // w:w is 1–600 percent; refuse anything outside rather than scale by it.
+    let scale = match run.horizontal_scale {
+        None => 1.0,
+        Some(pct) => {
+            if !(pct.is_finite() && pct > 0.0 && pct <= 600.0) {
+                return Err(MeasureError::Unsupported(
+                    "horizontalScale out of range".to_string(),
+                ));
+            }
+            pct / 100.0
+        }
+    };
+
+    if let Some(threshold) = run.kerning_min_pt
+        && !(threshold.is_finite() && (0.0..=1638.0).contains(&threshold))
+    {
+        return Err(MeasureError::Unsupported(
+            "kerningMinPt out of range".to_string(),
+        ));
+    }
+
+    // Per-character plan. Font slot, complex-script weight/size and language
+    // are resolved before shaping; this lets one OOXML run legitimately use
+    // Latin, East Asian and complex-script faces without splitting its source
+    // positions or losing cross-character shaping inside a same-style slice.
+    struct PlanChar {
+        source_index: usize,
+        utf16_offset: u32,
+        utf16_len: u32,
+        shaped: ShapedChars,
+        font: FontId,
+        metrics_font: FontId,
+        font_size_pt: f32,
+        line_font_size_pt: f32,
+        baseline_shift_px: f32,
+        /// 1.0, or `SMALL_CAPS_ADVANCE_SCALE` for a synthesized small cap.
+        advance_scale: f32,
+        /// UBA embedding level (odd = RTL) — segmentation only.
+        level: u8,
+        language: Option<String>,
+        features: Vec<ShapeFeature>,
+    }
+    enum ShapedChars {
+        One(char),
+        // w:caps expansions like ß → SS
+        Many(Vec<char>),
+    }
+
+    fn family_for_slot<'a>(run: &'a RunIn, slot: FontSlot, fallback: &'a str) -> &'a str {
+        let slots = run.font_slots.as_ref();
+        let selected = match slot {
+            FontSlot::Ascii => slots.and_then(|s| s.ascii.as_deref()),
+            FontSlot::HAnsi => slots.and_then(|s| s.h_ansi.as_deref()),
+            FontSlot::EastAsia => slots.and_then(|s| s.east_asia.as_deref()),
+            FontSlot::Cs => slots.and_then(|s| s.cs.as_deref()),
+        };
+        selected
+            .or_else(|| slots.and_then(|s| s.h_ansi.as_deref()))
+            .or_else(|| slots.and_then(|s| s.ascii.as_deref()))
+            .or(run.font_family.as_deref())
+            .unwrap_or(fallback)
+    }
+    fn language_for_slot(run: &RunIn, slot: FontSlot) -> Option<&str> {
+        let language = run.language.as_ref()?;
+        match slot {
+            FontSlot::EastAsia => language.east_asia.as_deref().or(language.latin.as_deref()),
+            FontSlot::Cs => language.bidi.as_deref().or(language.latin.as_deref()),
+            FontSlot::Ascii | FontSlot::HAnsi => language.latin.as_deref(),
+        }
+    }
+    fn supports_smcp(store: &FontStore, font: FontId, ch: char, size_px: f32, level: u8) -> bool {
+        let text = ch.to_string();
+        let plain = shape_with_direction(store, font, &text, size_px, &[], shape_direction(level));
+        let featured = shape_with_direction(
+            store,
+            font,
+            &text,
+            size_px,
+            &[ShapeFeature {
+                tag: *b"smcp",
+                value: 1,
+            }],
+            shape_direction(level),
+        );
+        matches!((plain, featured), (Ok(a), Ok(b)) if a.iter().map(|g| g.glyph_id).collect::<Vec<_>>() != b.iter().map(|g| g.glyph_id).collect::<Vec<_>>())
+    }
+
+    let owned_levels;
+    let levels = if resolved_levels.len() == text.chars().count() {
+        resolved_levels
+    } else {
+        owned_levels = char_levels(text, base_direction(run.rtl, input));
+        &owned_levels
+    };
+    let mut plan: Vec<PlanChar> = Vec::new();
+    let mut utf16_offset: u32 = 0;
+    let mut previous_slot = FontSlot::HAnsi;
+    let east_asia_hint =
+        run.font_slots.as_ref().and_then(|s| s.hint.as_deref()) == Some("eastAsia");
+    // Family and style are fixed per slot within a run, so each of the four
+    // resolves at most once instead of once per character. Keeping a chain
+    // trades memory for the next character's lookup, so a chain too large for
+    // that trade is rebuilt per character into `oversized` instead, one at a
+    // time — never more resident than resolving it per character already was.
+    let mut slot_chains: [Option<Vec<FontId>>; 4] = [None, None, None, None];
+    let mut oversized: Vec<FontId> = Vec::new();
+    for (char_index, ch) in text.chars().enumerate() {
+        let slot = char_slot(ch, run.complex_script, east_asia_hint, previous_slot);
+        previous_slot = slot;
+        let language = language_for_slot(run, slot);
+        let (mut shaped, mut advance_scale): (Vec<char>, f32) = if run.all_caps {
+            (uppercase_for_language(ch, language), 1.0)
+        } else if run.small_caps && ch.is_lowercase() {
+            (
+                uppercase_for_language(ch, language),
+                if input.authoritative_shaping {
+                    WORD_SMALL_CAPS_ADVANCE_SCALE
+                } else {
+                    BROWSER_SMALL_CAPS_ADVANCE_SCALE
+                },
+            )
+        } else {
+            (vec![ch], 1.0)
+        };
+        let complex = slot == FontSlot::Cs;
+        let bold = if complex {
+            run.bold_cs.unwrap_or(run.bold)
+        } else {
+            run.bold
+        };
+        let italic = if complex {
+            run.italic_cs.unwrap_or(run.italic)
+        } else {
+            run.italic
+        };
+        let base_size_pt = if complex {
+            run.font_size_cs.unwrap_or(default_size_pt)
+        } else {
+            default_size_pt
+        };
+        let (font_size_pt, baseline_shift_px) = script_metrics(base_size_pt, run);
+        let index = slot.index();
+        if slot_chains[index].is_none() {
+            let family = family_for_slot(run, slot, &input.defaults.font_family);
+            // Release the previous rebuilt chain before allocating the next, so
+            // a run never holds two of them at once.
+            oversized = Vec::new();
+            let resolved = match input.chain_for(family, bold, italic) {
+                // Text can reach a script slot after its fonts were collected
+                // (a resident edit); it measures with the run's own family.
+                Err(_) if matches!(slot, FontSlot::EastAsia | FontSlot::Cs) => {
+                    let base = family_for_slot(run, FontSlot::HAnsi, &input.defaults.font_family);
+                    input
+                        .chain_for(base, bold, italic)
+                        .or_else(|_| input.chain_for(base, run.bold, run.italic))
+                        .or_else(|_| input.chain_for(base, false, false))?
+                }
+                resolved => resolved?,
+            };
+            validate_chain(store, &resolved)?;
+            if resolved.len() <= MAX_KEPT_CHAIN_IDS {
+                slot_chains[index] = Some(resolved);
+            } else {
+                oversized = resolved;
+            }
+        }
+        let chain = slot_chains[index].as_deref().unwrap_or(&oversized);
+        let first = shaped[0];
+        let Some(mut font) = resolve_with_fallback(store, chain, first) else {
+            return Err(MeasureError::Unsupported("empty font chain".to_string()));
+        };
+        let mut features = kern_features(run.kerning_min_pt.is_some_and(|threshold| {
+            kern_enabled(
+                (font_size_pt * 2.0).round() as u32,
+                (threshold * 2.0).round() as u32,
+            )
+        }));
+        if input.authoritative_shaping
+            && run.small_caps
+            && !run.all_caps
+            && ch.is_lowercase()
+            && let Some(original_font) = resolve_with_fallback(store, chain, ch)
+            && supports_smcp(
+                store,
+                original_font,
+                ch,
+                pt_to_px(font_size_pt),
+                levels[char_index],
+            )
+        {
+            // A real small-cap glyph is already designed at the correct
+            // advance/ink size. Only synthesize uppercase at 0.8 when the
+            // selected face has no smcp substitution.
+            shaped = vec![ch];
+            advance_scale = 1.0;
+            font = original_font;
+            features.push(ShapeFeature {
+                tag: *b"smcp",
+                value: 1,
+            });
+        }
+        let first = shaped[0];
+        // Chars a resolved font doesn't cover (e.g. a rare char in a multi-char
+        // uppercase expansion) shape as that font's `.notdef` — a real box-glyph
+        // advance — rather than routing the block to browser measurement.
+        let utf16_len = ch.len_utf16() as u32;
+        plan.push(PlanChar {
+            source_index: char_index,
+            utf16_offset,
+            utf16_len,
+            shaped: if shaped.len() == 1 {
+                ShapedChars::One(first)
+            } else {
+                ShapedChars::Many(shaped)
+            },
+            font,
+            metrics_font: chain[0],
+            font_size_pt,
+            line_font_size_pt: base_size_pt,
+            baseline_shift_px,
+            advance_scale,
+            level: levels[char_index],
+            language: language.map(str::to_owned),
+            features,
+        });
+        utf16_offset += utf16_len;
+    }
+    let utf16_total = utf16_offset;
+
+    // Same-style directional ranges preserve kerning and ligatures.
+    let mut chars: Vec<CharAdv> = Vec::new();
+    let mut seg_start = 0;
+    while seg_start < plan.len() {
+        let first_plan = &plan[seg_start];
+        let font = first_plan.font;
+        let seg_scale = first_plan.advance_scale;
+        let seg_level = first_plan.level;
+        let mut seg_end = seg_start + 1;
+        while seg_end < plan.len()
+            && plan[seg_end].font == font
+            && plan[seg_end].advance_scale == seg_scale
+            && plan[seg_end].level == seg_level
+            && plan[seg_end].font_size_pt == first_plan.font_size_pt
+            && plan[seg_end].baseline_shift_px == first_plan.baseline_shift_px
+            && plan[seg_end].language == first_plan.language
+            && plan[seg_end].features == first_plan.features
+        {
+            seg_end += 1;
+        }
+
+        let mut shaped_text = String::new();
+        // (byte offset in shaped_text, original char index) per shaped char
+        let mut byte_to_char: Vec<(usize, usize)> = Vec::new();
+        for (char_index, pc) in plan.iter().enumerate().take(seg_end).skip(seg_start) {
+            match &pc.shaped {
+                ShapedChars::One(c) => {
+                    byte_to_char.push((shaped_text.len(), char_index));
+                    shaped_text.push(*c);
+                }
+                ShapedChars::Many(cs) => {
+                    for &c in cs {
+                        byte_to_char.push((shaped_text.len(), char_index));
+                        shaped_text.push(c);
+                    }
+                }
+            }
+        }
+
+        let glyphs = shape_with_properties(
+            store,
+            font,
+            &shaped_text,
+            pt_to_px(first_plan.font_size_pt),
+            &first_plan.features,
+            shape_direction(seg_level),
+            first_plan.language.as_deref(),
+        )
+        .map_err(|e| MeasureError::Invalid(format!("shaping failed: {e}")))?;
+        let mut glyph_clusters: Vec<(usize, f32)> = Vec::new();
+        for g in &glyphs {
+            let cluster = g.cluster as usize;
+            // last mapped shaped-char at or before this cluster byte
+            let slot = byte_to_char.partition_point(|&(byte, _)| byte <= cluster);
+            let Some(&(_, char_index)) = slot.checked_sub(1).and_then(|i| byte_to_char.get(i))
+            else {
+                continue;
+            };
+            if let Some((_, advance)) = glyph_clusters
+                .iter_mut()
+                .find(|(start, _)| *start == char_index)
+            {
+                *advance += g.x_advance;
+            } else {
+                glyph_clusters.push((char_index, g.x_advance));
+            }
+        }
+        glyph_clusters.sort_by_key(|&(start, _)| start);
+        if glyph_clusters
+            .first()
+            .is_none_or(|&(start, _)| start != seg_start)
+        {
+            glyph_clusters.insert(0, (seg_start, 0.0));
+        }
+        for cluster_index in 0..glyph_clusters.len() {
+            let (start, advance) = glyph_clusters[cluster_index];
+            let end = glyph_clusters
+                .get(cluster_index + 1)
+                .map_or(seg_end, |&(next, _)| next);
+            let pc = &plan[start];
+            let utf16_len = plan[start..end].iter().map(|c| c.utf16_len).sum();
+            chars.push(CharAdv {
+                utf16_offset: pc.utf16_offset,
+                utf16_len,
+                advance: advance * pc.advance_scale * scale,
+                is_space: plan[start..end]
+                    .iter()
+                    .all(|item| matches!(item.shaped, ShapedChars::One(' '))),
+                is_fit_space: plan[start..end].iter().all(|item| {
+                    matches!(
+                        item.shaped,
+                        ShapedChars::One(' ') | ShapedChars::One('\u{3000}')
+                    )
+                }),
+                level: pc.level,
+                logical_order: pc.source_index as u32,
+                font_size_pt: pc.line_font_size_pt,
+                metrics_font: pc.metrics_font,
+                baseline_shift_px: 0.0,
+            });
+        }
+
+        seg_start = seg_end;
+    }
+
+    // UAX-14 opportunities on the original text, translated from byte
+    // offsets to char indices. The final mandatory opportunity at
+    // `text.len()` is the trivial end-of-text one — the filler already ends
+    // words at the run boundary, so it is dropped here. Interior mandatory
+    // breaks cannot occur (control characters were refused above).
+    let byte_offsets: Vec<usize> = text.char_indices().map(|(b, _)| b).collect();
+    let mut breaks: Vec<usize> = Vec::new();
+    if !text.is_empty() {
+        for bo in break_opportunities(text) {
+            if bo.byte_index == 0 || bo.byte_index >= text.len() {
+                continue;
+            }
+            // opportunities are always char boundaries (line_break.rs)
+            if let Ok(char_index) = byte_offsets.binary_search(&bo.byte_index)
+                && let Some(cluster_index) = chars
+                    .iter()
+                    .position(|cluster| cluster.logical_order as usize == char_index)
+            {
+                breaks.push(cluster_index);
+            }
+        }
+    }
+
+    let first_font_size = chars.first().map_or(default_size_pt, |c| c.font_size_pt);
+    let first_metrics_font = chars.first().map_or_else(
+        || {
+            let family = run
+                .font_family
+                .as_deref()
+                .unwrap_or(&input.defaults.font_family);
+            input
+                .chain_for(family, run.bold, run.italic)
+                .map(|chain| chain[0])
+                .unwrap_or(FontId(0))
+        },
+        |c| c.metrics_font,
+    );
+    let first_baseline_shift = chars.first().map_or(0.0, |c| c.baseline_shift_px);
+    Ok(PreparedText {
+        chars,
+        utf16_len: utf16_total,
+        breaks,
+        letter_spacing,
+        font_size_pt: first_font_size,
+        metrics_font: first_metrics_font,
+        baseline_shift_px: first_baseline_shift,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::input::MeasureInput;
+    use super::*;
+    use crate::font_store::FontStore;
+
+    const FIXTURE: &[u8] = include_bytes!("../../tests/fonts/LiberationSans-Regular.ttf");
+
+    fn input_with(runs: serde_json::Value) -> MeasureInput {
+        serde_json::from_value(serde_json::json!({
+            "block": { "kind": "paragraph", "runs": runs },
+            "maxWidth": 1000.0,
+            "fontChains": { "liberation sans|0|0": [0] },
+            "defaults": { "fontSize": 12.0, "fontFamily": "Liberation Sans" }
+        }))
+        .unwrap()
+    }
+
+    /// Offsets are UTF-16 code units, not UTF-8 bytes: 'é' is 2 bytes but
+    /// 1 unit. (Non-BMP offsets are covered by the line-filler tests — the
+    /// fixture font is BMP-only, so an emoji cannot reach this builder.)
+    #[test]
+    fn utf16_offsets_count_code_units_not_bytes() {
+        let mut store = FontStore::new();
+        store.register(FIXTURE.to_vec()).unwrap();
+        // 'é' is 2 UTF-8 bytes but 1 UTF-16 unit: byte offsets [0, 2, 3],
+        // UTF-16 offsets must be [0, 1, 2].
+        let input = input_with(serde_json::json!([{ "kind": "text", "text": "éab" }]));
+        let prepared = prepare_runs(&store, &input.as_request()).unwrap();
+        let PreparedRun::Text(t) = &prepared[0] else {
+            panic!("expected text run");
+        };
+        let offsets: Vec<u32> = t.chars.iter().map(|c| c.utf16_offset).collect();
+        assert_eq!(offsets, vec![0, 1, 2]);
+        assert_eq!(t.utf16_len, 3);
+    }
+
+    /// An uncovered non-BMP char (fixture cmap is format 4/6, BMP-only)
+    /// refuses measurement instead of guessing a width.
+    #[test]
+    fn uncovered_char_falls_back_to_the_terminal_font_notdef() {
+        // A char no font in the chain covers (emoji, with a BMP-only fixture)
+        // must NOT bail to browser measurement — it shapes as the chain's
+        // terminal font's `.notdef`, so preparation succeeds with a real width.
+        let mut store = FontStore::new();
+        store.register(FIXTURE.to_vec()).unwrap();
+        let input = input_with(serde_json::json!([{ "kind": "text", "text": "a😀b" }]));
+        let prepared =
+            prepare_runs(&store, &input.as_request()).expect("uncovered char no longer bails");
+        assert!(!prepared.is_empty());
+    }
+
+    #[test]
+    fn authoritative_clusters_do_not_split_combining_sequences_or_ligatures() {
+        let mut store = FontStore::new();
+        store.register(FIXTURE.to_vec()).unwrap();
+        let mut input = input_with(serde_json::json!([{
+            "kind": "text",
+            "text": "e\u{301} ffi",
+            "letterSpacing": 2.0
+        }]));
+        input.authoritative_shaping = true;
+        let prepared = prepare_runs(&store, &input.as_request()).unwrap();
+        let PreparedRun::Text(text) = &prepared[0] else {
+            panic!("expected text run");
+        };
+        assert_eq!(text.chars[0].utf16_offset, 0);
+        assert_eq!(text.chars[0].utf16_len, 2, "combining mark stays with base");
+        assert!(
+            text.chars.iter().any(|cluster| cluster.utf16_len > 1),
+            "fixture exposes at least one multi-character shaped cluster"
+        );
+    }
+}

@@ -1,0 +1,173 @@
+{
+  "name": "betteroffice-viewer",
+  "displayName": "BetterOffice Viewer",
+  "description": "View and edit .docx, .xlsx, .pptx and Visio .vsdx files with high-fidelity WASM rendering — offline, no telemetry.",
+  "version": "0.1.0",
+  "publisher": "ahati",
+  "license": "Apache-2.0",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ahati/betteroffice-viewer"
+  },
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./out/extension.js",
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "docx",
+    "xlsx",
+    "pptx",
+    "vsdx",
+    "visio",
+    "office",
+    "ooxml",
+    "viewer",
+    "wasm"
+  ],
+  "activationEvents": [],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "betterofficeViewer.docx",
+        "displayName": "BetterOffice Word Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.docx"
+          },
+          {
+            "filenamePattern": "*.docm"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "betterofficeViewer.xlsx",
+        "displayName": "BetterOffice Excel Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.xlsx"
+          },
+          {
+            "filenamePattern": "*.xlsm"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "betterofficeViewer.pptx",
+        "displayName": "BetterOffice PowerPoint Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.pptx"
+          },
+          {
+            "filenamePattern": "*.pptm"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "betterofficeViewer.vsdx",
+        "displayName": "BetterOffice Visio Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.vsdx"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "betterofficeViewer.getDiagnostics",
+        "title": "BetterOffice Viewer: Show Diagnostics"
+      },
+      {
+        "command": "betterofficeViewer.reload",
+        "title": "BetterOffice Viewer: Reload Active Viewer"
+      },
+      {
+        "command": "betterofficeViewer.copyDiagnostics",
+        "title": "BetterOffice Viewer: Copy Diagnostics to Clipboard"
+      }
+    ],
+    "configuration": {
+      "title": "BetterOffice Viewer",
+      "properties": {
+        "betterofficeViewer.editing": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open OOXML files editable (editing ships in a later milestone; reserved)."
+        },
+        "betterofficeViewer.fonts": {
+          "type": "string",
+          "enum": [
+            "bundled",
+            "off"
+          ],
+          "default": "bundled",
+          "description": "Use bundled metric-compatible fonts for Office-accurate layout. 'off' uses system fonts only."
+        },
+        "betterofficeViewer.cjkFonts": {
+          "type": "string",
+          "enum": [
+            "off",
+            "cdn"
+          ],
+          "default": "off",
+          "description": "Fetch CJK font faces from the pinned betteroffice CDN. This is the only network access the extension can perform."
+        },
+        "betterofficeViewer.initialZoom": {
+          "type": "string",
+          "enum": [
+            "fitPage",
+            "fitWidth",
+            "100"
+          ],
+          "default": "fitPage",
+          "description": "Initial zoom applied when a viewer opens."
+        },
+        "betterofficeViewer.forceReadOnly": {
+          "type": "boolean",
+          "default": false,
+          "description": "Always open documents read-only, regardless of the editing setting."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "package": "node scripts/build.mjs --production",
+    "typecheck": "tsc -p ./ --noEmit && tsc -p tsconfig.webview.json --noEmit",
+    "test": "npm run compile && node scripts/run-tests.mjs",
+    "vscode:pretest": "npm run compile",
+    "build:vsdx-wasm": "node scripts/build-vsdx-wasm.mjs"
+  },
+  "dependencies": {
+    "@betteroffice/docx": "0.4.3",
+    "@betteroffice/docx-react": "0.4.3",
+    "@betteroffice/xlsx": "0.3.0",
+    "@betteroffice/xlsx-react": "0.3.0",
+    "@betteroffice/pptx": "0.2.0",
+    "@betteroffice/pptx-react": "0.2.0",
+    "@betteroffice/fonts": "0.4.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-electron": "^3.1.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.2"
+  }
+}
