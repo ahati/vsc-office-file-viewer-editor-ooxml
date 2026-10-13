@@ -52,7 +52,15 @@ function ensureReactRoot(): ReturnType<typeof createRoot> {
 		container.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;min-height:0;color-scheme:light';
 		// The document page is forced light; keep native scrollbars/form controls light as well.
 		const scheme = host.ownerDocument.createElement('style');
-		scheme.textContent = '#office-docx-mount, #office-docx-mount * { color-scheme: light; }';
+		const scope = '#office-docx-mount';
+		scheme.textContent = [
+			`${scope}, ${scope} * { color-scheme: light; }`,
+			`${scope} { scrollbar-color: #c4ccd6 #f3f5f8; }`,
+			`${scope} ::-webkit-scrollbar { width: 12px; height: 12px; background: #f5f6f8; }`,
+			`${scope} ::-webkit-scrollbar-thumb { background: #c4ccd6; border-radius: 6px; border: 3px solid #f5f6f8; }`,
+			`${scope} ::-webkit-scrollbar-thumb:hover { background: #aab3c0; }`,
+			`${scope} ::-webkit-scrollbar-corner { background: #f5f6f8; }`,
+		].join('\n');
 		host.ownerDocument.head.appendChild(scheme);
 		reactRoot = createRoot(container);
 	}

@@ -38,7 +38,15 @@ function ensureReactRoot(): ReturnType<typeof createRoot> {
 		// Light scrollbars/form controls too: the editor chrome is light-styled, so the whole
 		// subtree opts out of the dark `color-scheme` VS Code applies to webviews.
 		const scheme = host.ownerDocument.createElement('style');
-		scheme.textContent = '#office-vsdx-mount, #office-vsdx-mount * { color-scheme: light; }';
+		const scope = '#office-vsdx-mount';
+		scheme.textContent = [
+			`${scope}, ${scope} * { color-scheme: light; }`,
+			`${scope} { scrollbar-color: #c4ccd6 #f3f5f8; }`,
+			`${scope} ::-webkit-scrollbar { width: 14px; height: 14px; background: #f3f5f8; }`,
+			`${scope} ::-webkit-scrollbar-thumb { background: #c4ccd6; border-radius: 7px; border: 3px solid #f3f5f8; }`,
+			`${scope} ::-webkit-scrollbar-thumb:hover { background: #aab3c0; }`,
+			`${scope} ::-webkit-scrollbar-corner { background: #f3f5f8; }`,
+		].join('\n');
 		host.ownerDocument.head.appendChild(scheme);
 		reactRoot = createRoot(container);
 	}
