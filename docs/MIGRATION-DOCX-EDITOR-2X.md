@@ -1,6 +1,6 @@
 # Migration: `@eigenpal/docx-editor-*` 1.9.0 → `@docx-editor.dev/*` 2.29.0
 
-Status: **planned** · Scope: DOCX webview engine only (xlsx/pptx/vsdx untouched) · Target: `@docx-editor.dev/core@2.29.0` + `@docx-editor.dev/react@2.29.0`
+Status: **executed** (2026-10; see §11 addendum) · Scope: DOCX webview engine only (xlsx/pptx/vsdx untouched) · Target: `@docx-editor.dev/core@2.29.0` + `@docx-editor.dev/react@2.29.0`
 
 Product invariants (unchanged by this migration, audited in §2): **fully offline · no
 share/collaboration surface · no telemetry**.
@@ -228,3 +228,34 @@ default but make it a setting:
   dialog; hide the row if it is noisy.
 - Rollback: single revert of the dependency swap + `git checkout` of the five touched files;
   the old 1.9.0 scope stays installable.
+
+## 11. Execution addendum (2026-10-13)
+
+Executed via a multi-agent workflow (spikes A–E → four parallel worktree slices → integration).
+Landed on `migration/docx-editor-2x`:
+
+- `webview/fonts.ts`: byte-backed `FontConfigurationFragment` (20 faces, all four variants;
+  `createFontSource`; per-face degradation).
+- `webview/mounts/docx.tsx`: full 2.29.0 port (props per §1, save via `ref.save()`, snapshot
+  `parseError` polling for load failures, `getPageGeometry()` restore signal, zoom via the
+  `Editor` facade, `menu={{ reportIssue: false, onOpen: noop, File→Open hidden }}` — the no-op
+  `onOpen` also neutralizes the bar's Ctrl+O, which hiding the row alone does not).
+- `scripts/build.mjs`: new forbidden markers (`googleapis`, `gstatic`), harfbuzz.wasm manifest +
+  `__extAssetUrl` rewrite, yjs/pdf-lib leak guard, agents stub deleted. **Webview bundles are now
+  ESM** (`<script type="module">`) — 2.29.0 core uses top-level await for HarfBuzz init.
+- `officeFileViewer.colorMode` (light default) wired end-to-end; light-forcing CSS applied only
+  in `light`.
+- `@docx-editor.dev/fonts` NOT adopted (our @betteroffice faces are richer); Google Fonts origin
+  not installed at all.
+
+Verified: typecheck, dev + production builds (postchecks green), integration tests (all four
+formats load in VS Code), forbidden-marker sweep = 0 on all bundles, no yjs/pdf-lib in the docx
+bundle, harfbuzz.wasm in the manifest.
+
+Known residuals (manual QA pending): dark/system chrome visuals; corrupt-docx parseError path
+not exercised with a real corrupt file; `initialZoom: fitPage` degrades to width-fit (2.29.0 has
+no page-height fit target); export-to-PDF offline failure mode not manually exercised.
+
+Incident note: a worktree agent's committed `node_modules` symlink clobbered the real install
+during the first merge (git does not protect ignored dirs); recovered via `npm ci --offline`; the
+symlink was excluded from all merge commits and the agents' branches deleted after merging.

@@ -214,7 +214,10 @@ function DocxViewer({ DocxEditor, init, context, fonts }: DocxViewerProps): JSX.
 				// An offline product must not offer the upstream issue tracker (plan §2, M3).
 				reportIssue: false,
 				// VS Code owns opening files; drop the packaged File › Open row (the one
-				// remaining way to reach the menu's own file picker).
+				// remaining way to reach the menu's own file picker). Hiding the row does
+				// NOT unbind the bar's Ctrl+O — the keydown prefers menu.onOpen over the
+				// packaged hidden file input, so a no-op handler neutralizes it.
+				onOpen: () => {},
 				children: (
 					<DocxEditor.Menu.File>
 						<DocxEditor.Menu.Open hidden />
