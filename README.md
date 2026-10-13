@@ -10,7 +10,7 @@ high-fidelity WASM engines. No Office install, no server conversion, no telemetr
 | Word | `.docx` `.docm` | Paged editing surface with headers/footers, footnotes, tables, tracked changes & comment cards, text selection & copy |
 | Excel | `.xlsx` `.xlsm` | Sheet tabs, formulas (cached values), merged cells, frozen panes, cell selection & copy, zoom |
 | PowerPoint | `.pptx` `.pptm` | Slide canvas with masters, images, speaker notes, thumbnail rail, slide navigation |
-| Visio | `.vsdx` | Multi-page diagrams with connectors, themes and layer visibility, page tabs, pan & zoom |
+| Visio | `.vsdx` | Full Visio-style editor: shape stencils with search, Drawing Explorer, Shape Data, Layers, page tabs, connectors, pan & zoom |
 
 ## Highlights
 

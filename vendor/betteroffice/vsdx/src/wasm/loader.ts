@@ -61,9 +61,14 @@ const MAX_QUEUED_UPDATE_BYTES = 8 * 1024 * 1024;
 
 let initialized = false;
 let initialization: Promise<void> | undefined;
-export function initWasm(input: WasmInitInput = new URL('./generated/vsdx_wasm_bg.wasm', import.meta.url)): Promise<void> {
+// Local modification (vendored): the implicit-URL fallback is evaluated lazily, AFTER the
+// memoized-initialization check. Bare `initWasm()` calls from the React editor would otherwise
+// construct an `import.meta`-relative URL at call time, which throws in an IIFE webview bundle
+// even when the wasm was already provided as bytes.
+export function initWasm(input?: WasmInitInput): Promise<void> {
   if (initialized) return Promise.resolve();
   if (initialization) return initialization;
+  input ??= new URL('./generated/vsdx_wasm_bg.wasm', import.meta.url);
   initialization = initWasmModule({ module_or_path: input }).then(() => { initialized = true; }, error => { initialization = undefined; throw toError(error); });
   return initialization;
 }

@@ -10,7 +10,12 @@
 		"types": [],
 		"skipLibCheck": true,
 		"forceConsistentCasingInFileNames": true,
-		"noUnusedLocals": true
+		"noUnusedLocals": true,
+		"baseUrl": ".",
+		"paths": {
+			"@betteroffice/vsdx": ["vendor/betteroffice/vsdx/src/index.ts"],
+			"@betteroffice/vsdx-i18n": ["vendor/betteroffice/vsdx-i18n/src/index.ts"]
+		}
 	},
 	"include": ["webview", "vendor/betteroffice/vsdx"],
 	"exclude": [

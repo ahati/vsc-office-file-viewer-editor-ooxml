@@ -36,7 +36,9 @@ Each copied crate keeps its `README.md` (referenced by `readme = "README.md"` in
 `crates/vsdx-parse/tests/fixtures/` through relative paths (`../../vsdx-parse/tests/fixtures/...`) that
 must stay resolvable. Rust `tests/`/`#[cfg(test)]` code is never compiled for the release wasm build.
 
-## Local modifications (Apache-2.0 §4(b) — "modified files must carry prominent notices")
+## Local modifications
+- `vsdx/src/wasm/loader.ts`: `initWasm` default parameter evaluated lazily after the memoization check (bare `initWasm()` from vsdx-react threw `import.meta`-relative URL construction in the IIFE webview bundle).
+ (Apache-2.0 §4(b) — "modified files must carry prominent notices")
 
 1. **`vsdx/src/collaboration/protocol.ts`** — one import rewritten:
 
@@ -145,3 +147,13 @@ compares the fresh wasm-bindgen declarations (upstream sort applied) against the
 
 Exit ramp: if `@betteroffice/vsdx` is ever published to npm, replace this directory with the package
 dependency (the extension reaches the engine only through `webview/mounts/*` adapters, DESIGN §3.6).
+
+## Vendored vsdx React editor + i18n (unpublished upstream)
+
+- `vsdx-react/` ← upstream `packages/vsdx-react/src` (minus `*.test.*` and the repo-root-bound
+  dev helper `components/ribbon/engineProbe.ts`, deleted)
+- `vsdx-i18n/` ← upstream `packages/vsdx-i18n/src` + `en.json` (minus tests)
+- Both are private upstream (`publish: false`) but Apache-2.0 within the repository; imported by
+  the extension through esbuild aliases `@betteroffice/vsdx` → `vendor/betteroffice/vsdx/src/index.ts`
+  and `@betteroffice/vsdx-i18n` → `vendor/betteroffice/vsdx-i18n/src/index.ts`
+  (tsconfig `paths` mirror these for typechecking).

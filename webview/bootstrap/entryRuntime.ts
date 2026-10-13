@@ -81,19 +81,24 @@ export function runViewerEntry(options: EntryOptions): void {
 	let stateTimer: ReturnType<typeof setTimeout> | undefined;
 	const pendingState: { zoom?: number; page?: number; pageCount?: number } = {};
 	const fail = (phase: string, error: unknown): void => {
-		const message = error instanceof Error ? error.message : String(error);
+		const stack = error instanceof Error ? error.stack : undefined;
+		const message = error instanceof Error
+			? error.message
+			: typeof error === 'object' && error !== null
+				? JSON.stringify(error, Object.getOwnPropertyNames(error))
+				: String(error);
 		console.error(`[office-file-viewer] ${format} ${phase} failed`, error);
 		renderErrorPanel(phase, message);
-		post({ type: 'load-error', phase, message });
+		post({ type: 'load-error', phase, message: stack ? `${message}\n${stack}` : message });
 	};
 
 	// Engine/runtime errors that escape a mount (xlsx has no `onError` prop at all) also land in the
 	// error panel once the entry is live.
 	window.addEventListener('error', (event) => {
-		if (event.error) fail('runtime', event.error);
+		if (event.error) fail('runtime', event.error instanceof Error ? { message: event.error.message, stack: event.error.stack } : event.error);
 	});
 	window.addEventListener('unhandledrejection', (event) => {
-		fail('runtime', (event as PromiseRejectionEvent).reason);
+		fail('runtime', (event as PromiseRejectionEvent).reason instanceof Error ? { message: (event as PromiseRejectionEvent).reason.message, stack: (event as PromiseRejectionEvent).reason.stack } : (event as PromiseRejectionEvent).reason);
 	});
 
 	const savedState = vscode.getState() as { zoom?: number; page?: number } | undefined;
