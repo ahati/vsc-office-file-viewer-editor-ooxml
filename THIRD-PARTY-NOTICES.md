@@ -8,9 +8,10 @@ corresponding upstream package.
 
 ## betteroffice (`@betteroffice/*`)
 
-- Packages bundled at runtime: `@betteroffice/docx`, `@betteroffice/docx-react`,
-  `@betteroffice/xlsx`, `@betteroffice/xlsx-react`, `@betteroffice/pptx`,
-  `@betteroffice/pptx-react`, `@betteroffice/fonts`.
+- Packages bundled at runtime: `@betteroffice/xlsx`, `@betteroffice/xlsx-react`,
+  `@betteroffice/pptx`, `@betteroffice/pptx-react`, `@betteroffice/fonts`. (The Word surface no
+  longer uses `@betteroffice/docx`; it bundles the upstream `@docx-editor.dev/*` packages instead —
+  see the next entry.)
 - Upstream: The OpenOOXML Project (`openooxml/betteroffice`), pinned for this milestone at
   commit `57fc1984`.
 - License: Apache License, Version 2.0 — Copyright 2026 Elia Hilse, The OpenOOXML Project.
@@ -19,25 +20,58 @@ corresponding upstream package.
   build scripts under `vendor/betteroffice/`; see `vendor/betteroffice/README.md` for the recorded
   upstream revision and the sync procedure.
 
-### eigenpal docx editor (derivation of `@betteroffice/docx`)
+### docx-editor.dev (`@docx-editor.dev/*`) — upstream of the `@betteroffice/docx` derivation
 
 The API design and portions of the TypeScript packages in the betteroffice repository derive from the
-eigenpal docx editor (upstream repository: <https://github.com/eigenpal/docx-editor>, mirrored at
-<https://github.com/sorenlouv/docx-editor>), published on npm as the following packages (last
-release: 1.9.0):
+docx-editor.dev editor (upstream repository: <https://github.com/eigenpal/docx-editor>, mirrored at
+<https://github.com/sorenlouv/docx-editor>). The Word surface of this extension bundles the current
+2.x line, published on npm under the renamed `@docx-editor.dev/*` scope:
 
-- `@eigenpal/docx-editor-core`
-- `@eigenpal/docx-editor-react`
-- `@eigenpal/docx-editor-vue`
-- `@eigenpal/docx-editor-i18n`
-- `@eigenpal/docx-editor-agents`
-- `@eigenpal/nuxt-docx-editor`
+- `@docx-editor.dev/core` 2.29.0
+- `@docx-editor.dev/react` 2.29.0
+- `@docx-editor.dev/i18n` 2.29.0 (transitive dependency of both)
+
+2.29.0 is the current release of the same codebase previously consumed as the
+`@eigenpal/docx-editor-*` packages (1.9.0, the frozen end of the old npm scope).
 
 License: Apache License, Version 2.0 (per the `license` field of the published package metadata and
 the `LICENSE` file shipped in the packages). Copyright 2026 EigenPal Inc.
 
 The license terms are identical to this repository's root `LICENSE`; that file serves as the copy of
 the license for this derivation.
+
+## Bundled docx-editor runtime dependencies
+
+The Word editor's published bundles pull in the runtime packages below, which this extension's build
+bundles into the webview. Each is redistributed in modified (bundled, minified, tree-shaken) form
+under its own license; the authoritative license texts ship with the installed packages.
+
+### MIT
+
+- `harfbuzzjs` 1.6.1 — MIT, Copyright (c) 2019-2026 The harfbuzzjs project authors. The published
+  `harfbuzz.wasm` also contains HarfBuzz itself, distributed under HarfBuzz's MIT-style license
+  (`licenses/HarfBuzz-COPYING.txt` in upstream `@docx-editor.dev/core`).
+- `utif2` 4.1.0 — MIT, Copyright (c) 2017 Photopea.
+- `bidi-js` 1.1.0 — MIT, Copyright (c) 2021 Jason Johnston.
+- `fflate` 0.8.3 — MIT, Copyright (c) 2026 Arjun Barrett.
+- `fast-xml-parser` 5.11.2 — MIT, Copyright (c) 2017 Amit Kumar Gupta.
+- `prosemirror-view` 1.42.6, `prosemirror-model` 1.25.12, `prosemirror-state` 1.4.4,
+  `prosemirror-keymap` 1.2.3, `prosemirror-commands` 1.7.2 and `prosemirror-transform` 1.12.2
+  (transitive) — MIT, Copyright (C) 2015-2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and
+  others.
+- `clsx` 2.1.1 — MIT, Copyright (c) Luke Edwards <luke.edwards05@gmail.com>.
+- `@radix-ui/react-select` 2.4.1 — MIT, Copyright (c) 2022 WorkOS. Bundled together with the internal
+  `@radix-ui/*` primitives it depends on, which carry the same license and copyright.
+
+### Apache-2.0
+
+- `emf-converter` 2.0.2 — Apache License, Version 2.0 (author: ChristopherVR,
+  <https://github.com/ChristopherVR/emf-converter>).
+- `class-variance-authority` 0.7.1 — Apache License, Version 2.0 — Copyright 2022 Joe Bell.
+
+`@docx-editor.dev/core` declares `yjs` and `pdf-lib` as peer dependencies for its collaboration and
+PDF-export capability surface. Neither is imported by the editor chain and neither is bundled into
+the webview.
 
 ---
 

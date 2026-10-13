@@ -14,11 +14,11 @@ VS Code docs/issues, and marketplace crawl — details inline.
 | | |
 |---|---|
 | **What** | Read-only high-fidelity viewers for `.docx/.docm`, `.xlsx/.xlsm`, `.pptx/.pptm`, **`.vsdx`** as VS Code custom editors |
-| **Engine** | `@betteroffice/{docx,xlsx,pptx}` (npm, Apache-2.0, Rust→WASM) + `@betteroffice/vsdx` (vendored from source — not yet on npm) |
-| **Rendering** | Canvas 2D via each engine's React editor in `readOnly` mode (docx/xlsx/pptx); thin custom canvas shell for vsdx |
-| **Network** | Zero by default; fonts bundled from `@betteroffice/fonts` (replaces the old Google-Fonts opt-in) |
+| **Engine** | Word: `@docx-editor.dev/{core,react}` 2.29.0 (npm, Apache-2.0, DOM/ProseMirror paginated editor; replaced the interim `@betteroffice/docx`); `@betteroffice/{xlsx,pptx}` (npm, Apache-2.0, Rust→WASM) + `@betteroffice/vsdx` (vendored from source — not yet on npm) |
+| **Rendering** | Paged DOM/ProseMirror surface for Word; canvas 2D via each engine's React editor for xlsx/pptx; thin custom canvas shell for vsdx |
+| **Network** | Zero by default; fonts bundled from `@betteroffice/fonts` (replaces the old Google-Fonts opt-in). Word shapes text with one bundled `harfbuzz.wasm` served same-origin — no engine ships a worker, no collaboration surface, no telemetry (audit: `docs/MIGRATION-DOCX-EDITOR-2X.md` §2) |
 | **License** | **Apache-2.0 recommended** (§7) — upstream is Apache-2.0 with NOTICE obligations |
-| **Size budget** | ~35–50 MB VSIX (≈47 MB raw WASM + 15 MB fonts + JS) — well under marketplace limits (§9) |
+| **Size budget** | ~20–30 MB VSIX (≈17 MB raw WASM + 15 MB fonts + JS; the 30 MB `@betteroffice/docx` engine wasm went away with the Word engine swap) — well under marketplace limits (§9) |
 
 **Headline positioning:** the only true-canvas, offline, zero-telemetry VS Code viewer spanning OOXML **and** VSDX.
 The incumbent (`cweijan.vscode-office`, 1.57 M installs) uses DOM approximations and cannot open Visio at all;
@@ -30,7 +30,7 @@ the only existing vsdx viewer has 446 installs and self-documented fidelity gaps
 
 | Package | npm | Unpacked | WASM modules (raw) | Worker |
 |---|---|---|---|---|
-| `@betteroffice/docx` 0.4.3 | ✅ | 31.3 MB | edit 20.3 MB · parse 5.3 MB · layout 4.2 MB · opc 0.35 MB | `residentEngineWorker.mjs` (module worker) |
+| `@docx-editor.dev/{core,react,i18n}` 2.29.0 | ✅ | ≈1–2 MB JS + `harfbuzz.wasm` | `harfbuzz.wasm` (HarfBuzz text shaping; loaded same-origin) | none — single-file react bundle, zero dynamic imports (the old `@betteroffice/docx` worker went away with the engine swap) |
 | `@betteroffice/xlsx` 0.3.0 | ✅ | 5.3 MB | 5.2 MB | none in published dist — in-thread (session worker exists only in monorepo sources) |
 | `@betteroffice/pptx` 0.2.0 | ✅ | 5.6 MB | 5.4 MB | none in published dist — in-thread (session worker exists only in monorepo sources) |
 | `@betteroffice/vsdx` 0.1.0 | ❌ private | ~0.3 MB TS + wasm | ~5–6 MB (est.; single module, raster feature) | none (main-thread) |
@@ -39,17 +39,22 @@ the only existing vsdx viewer has 446 installs and self-documented fidelity gaps
 - **Offline by default:** no WebSocket/XHR/EventSource anywhere in `packages/*/src`; collaboration is strictly
   transport-injected (we simply don't inject one). The only network path in the whole stack is the optional
   `@betteroffice/fonts/cdn` provider (pinned jsdelivr) — we won't use it unless the user opts in.
+  For Word, the 2.x audit (`docs/MIGRATION-DOCX-EDITOR-2X.md` §2) confirms the same posture: no
+  WebSocket/sendBeacon/EventSource/`new Worker`/analytics strings in the `@docx-editor.dev` dists, no Google-Fonts
+  origin (the API is gone; we pass font bytes), the only `fetch` is the same-origin `harfbuzz.wasm` lookup, and the
+  `yjs`/`pdf-lib` peers of the unused collaboration / PDF-export entrypoints are never imported or bundled.
 - **Fidelity:** engine-authored benchmarks — docx SSIM 0.838 vs LibreOffice 0.769 with **63/63 exact page counts**;
   pptx SSIM 0.917. Reproduce in our own harness before using in marketing (§13).
 - **Asset loading has no override knobs**: wasm URLs and worker paths are hard-coded
   `new URL('...', import.meta.url)` literals; the only documented override is `initWasm(bytes | WebAssembly.Module)`.
-  This drives the bundling architecture in §4.
+  This drives the bundling architecture in §4. The Word engine's `harfbuzz.wasm` loader is the one such reference
+  we still rewrite: the build maps it to a manifest asset served from the extension origin.
 
 ### Editor integration surfaces (readOnly mode)
 
 | Format | Component | Buffer prop | Fonts | Notable readOnly behavior |
 |---|---|---|---|---|
-| docx | `DocxEditor` (docx-react) | `documentBuffer` | optional `fonts` prop + process-wide `configureDefaultFonts()` | `mode:'viewing'`; keeps comment/track-change cards, outline, selection; ref: `print()`, `scrollToPage`, `whenLayoutComplete`, `exportStructuredWithPages` |
+| docx | `DocxEditor` (@docx-editor.dev/react) | `document: DocumentSource` | `fonts: FontConfigurationFragment` (byte-backed) | `mode:'view'\|'edit'`; keeps comment/track-change cards, outline, selection; single bundle, no worker; ref: `load/save/getEditor/snapshot` and the editor facade for zoom/paging |
 | xlsx | `XlsxEditor` (xlsx-react) | `file: Uint8Array` | **none — no font API exists** (TBD, §11 R8) | toolbar hidden, sheet tabs/zoom/navigation stay; API: `findText`, `readCells`, `renderPng`, `print` |
 | pptx | `PptxEditor` (pptx-react) | `file: Uint8Array` | **`fonts` required** (`PptxFontFace[]`) | thumbnail rail + zoom stay; slideshow/exportPng/tool disabled by the viewer variant; API: `goToSlide`, `findText`, `exportPng` |
 | vsdx | **custom shell over core** | bytes → `openDiagram()` | `VsdxFontFace[]` (same loader as pptx) | our own page tabs / zoom / fit / pan; `DiagramHandle.exportPdf/Svg/Png` available |
@@ -96,12 +101,13 @@ extension host (node)                      webview (browser context)
 
 VS Code docs require workers to be loaded from `data:`/`blob:` URIs, and **module workers that `import()`/fetch
 webview-resource URIs are broken since VS Code 1.119** (open bug [`microsoft/vscode#315494`](https://github.com/microsoft/vscode/issues/315494),
-regression from PR #311844). **Verified against the published npm dists:** only docx ships a worker
-(`residentEngineWorker.mjs`, that exact shape); the published xlsx/pptx dists contain no workers and no `new Worker`
-at all — their sessions run in-thread on the main thread via `initWasm(bytes)`. The docx worker is
-with relative chunk imports.
+regression from PR #311844). **Verified against the published npm dists:** no entry ships a worker today — the Word
+engine's 2.x react bundle is a single file with zero dynamic imports, the xlsx/pptx dists contain no workers and no
+`new Worker` at all (their sessions run in-thread via `initWasm(bytes)`), and vsdx runs on the main thread. The worker
+path below existed only for the interim `@betteroffice/docx` engine and is kept as the design record for any future
+engine that needs one.
 
-**Decision: fully self-contained workers.**
+**Interim decision (historical, retained for the record): fully self-contained workers.**
 1. esbuild bundles the docx engine worker (`residentEngineWorker`) as a **separate
    single-file IIFE entry** (chunks inlined, wasm-import specifiers rewritten to `import` of emitted assets — the same
    rewrite plugin the predecessor already has, extended with a worker-URL rewrite).
@@ -128,11 +134,10 @@ inside the worker's context.
 ### 4.3 React & chrome
 
 React 19 + `react-dom` bundled per format entry (IIFE, no splitting — ~140 KB ×3, acceptable). Import
-`@betteroffice/docx-react/styles.css` (the only stylesheet the packages ship; xlsx/pptx use inline styles).
+`@docx-editor.dev/react/styles.css` for Word (the engine's only stylesheet); xlsx/pptx use inline styles.
 i18n packages are hard dependencies with `en` hard-coded as default — use per-locale subpath imports / rely on
-tree-shaking to avoid bundling 10 locale JSONs. Docx toolbar/zoom/ruler/outline toggles give VS Code-native feel;
-we hide editing affordances via `readOnly` (+ `mode:'viewing'` for docx) and hide save buttons (`onSave` unset →
-downloads instead; gate it).
+tree-shaking to avoid bundling 10 locale JSONs. Docx chrome (toolbar/zoom/ruler/outline) gives VS Code-native feel;
+the 2.x editor selects read-only behavior with `mode:'view'` and saves through the ref's `save()`.
 
 ### 4.4 vsdx viewer (custom, no React)
 
@@ -169,7 +174,9 @@ Attribution: keep Apache-2.0 headers, copy `LICENSE`+`NOTICE`, add `vendor/READM
 exact page-count match 61.9% vs 46.5% without) replaces the predecessor's Google-Fonts hack **and keeps the viewer
 offline** — this is a net win over 0.1.2's fidelity story.
 
-- **docx:** `configureDefaultFonts({ fonts })` from `@betteroffice/docx/layout` (process-wide, once).
+- **docx:** the 2.x editor takes byte-backed fonts (`createFontSource(bytes, request)` →
+  `composeFontConfiguration`); we keep the bundled `@betteroffice/fonts` faces and hand their bytes to the engine,
+  which shapes with the bundled `harfbuzz.wasm`.
 - **pptx/vsdx:** load 4 style variants of one family: `resolveMetricCompatFace('Arial', b, i) ?? resolveLastResortFace(...)`
   → `loadBundledFontBytes` → `{family, bold, italic, bytes}` (exact pattern from upstream demos).
 - **xlsx:** no font API exists — system/bundled-font metrics for grid text are engine-internal; verify rendering quality
@@ -187,8 +194,8 @@ Both are permissive and compatible with bundling Apache-2.0 dependencies. Choose
 1. **Patent grant** — Apache-2.0's explicit patent license protects downstream users of an extension that ships large
    third-party Apache-2.0 binaries; ISC has none.
 2. **NOTICE mechanics match the obligation.** Upstream ships a `NOTICE` ("BetterOffice, Copyright 2026 Elia Hilse, The
-   OpenOOXML Project") and a `THIRD-PARTY-NOTICES.md` (the docx engine derives from eigenpal/docx-editor, also
-   Apache-2.0). Apache-2.0 §4(d) requires preserving these when we redistribute — having our own NOTICE file makes the
+   OpenOOXML Project") and a `THIRD-PARTY-NOTICES.md` (the docx engine derives from the eigenpal/docx-editor project,
+   now published as `@docx-editor.dev/*` and consumed at 2.29.0, also Apache-2.0). Apache-2.0 §4(d) requires preserving these when we redistribute — having our own NOTICE file makes the
    distribution self-consistent.
 3. **Uniformity** — one license story across our code and the vendored `packages/vsdx` snapshot.
 
@@ -225,12 +232,12 @@ is taken by the incumbent — use e.g. **"BetterOffice Viewer — docx, xlsx, pp
 
 | Item | Raw | Notes |
 |---|---|---|
-| docx wasm (4) | 30.2 MB | edit dominates; loaded lazily per format |
+| docx (`@docx-editor.dev` JS + `harfbuzz.wasm`) | ~1–2 MB | single react bundle + one same-origin shaping asset; no worker |
 | xlsx + pptx wasm | 10.6 MB | |
 | vsdx wasm (est.) | ~5–6 MB | |
 | @betteroffice/fonts | ~15 MB | TTFs; subset later if needed |
-| JS (3 React entries + workers + vsdx shell + React runtime) | ~8–12 MB | minified |
-| **VSIX (zip)** | **~35–50 MB** | wasm compresses ~2.5–3×; far under Open VSX's 256 MB cap (MS Marketplace has no official cap; empirically ≥360 MB accepted) |
+| JS (4 webview entries + vsdx shell + React runtime) | ~8–12 MB | minified |
+| **VSIX (zip)** | **~20–30 MB** | wasm compresses ~2.5–3×; far under Open VSX's 256 MB cap (MS Marketplace has no official cap; empirically ≥360 MB accepted) |
 
 Memory: one engine per webview panel; keep `supportsMultipleEditorsPerDocument: false` (predecessor behavior);
 **no `retainContextWhenHidden`** (docs: high memory overhead) — accept cold re-init on tab switch, keep
@@ -261,10 +268,10 @@ variant, upstream contribution of vsdx viewer components.
 | R1 | Webview worker/resource loading regressions (open bug #315494 class; SW churn #318660) | self-contained blob workers + wasm-bytes transfer (§4.1); test on stable **and** insiders each release; diagnostics fallback UI with console capture |
 | R2 | vsdx is unofficial/unpublished; upstream may change its private API | pin upstream SHA in `vendor/README`; mechanical npm swap later; vsdx isolated in its own phase & module |
 | R3 | vsdx wasm build nondeterminism (upstream doesn't pin rustc) | we pin rustc + binaryen in our CI; functional (not checksum) validation; LFS or CI-artifact for the ~5 MB binary if committed |
-| R4 | docx 20 MB edit-wasm slows cold open | lazy-load wasm per format only when a file opens; prewarm only the opened format; show progress state (engines report load phases) |
+| R4 | Word bundle + HarfBuzz shaper add ~1–2 MB (the 20 MB `@betteroffice/docx` engine wasm is gone); xlsx/pptx/vsdx wasm can slow cold open | lazy-load wasm per format only when a file opens; prewarm only the opened format; show progress state (engines report load phases) |
 | R5 | VSIX size growth (fonts/wasm) | budget table (§9); fonts setting `off`; revisit font subsetting |
 | R6 | Upstream API churn (`@experimental` markers; pptx viewer props already deprecated for 0.6.0) | pin exact versions; changeset review on bump; wrap engine APIs behind thin adapters |
-| R7 | Memory pressure with many editors open | one worker per panel, terminate on dispose, no retainContextWhenHidden, `onMemoryPressure` hook (docx) |
+| R7 | Memory pressure with many editors open | one engine per webview panel (no workers), dispose wasm handles on `onDidDispose`, no retainContextWhenHidden |
 | R8 | xlsx has no font-supply API → metric drift on grid text | spike S3; document limitation; upstream issue if needed |
 | R9 | Fidelity claims unverifiable | reproduce benchmarks with our own harness before any marketing use (§13) |
 | R10 | Vendored-snapshot drift (missed `shared/collaboration-limits.ts`, `.d.ts`, headers) | vendoring checklist in `vendor/README`; CI typecheck fails on missing pieces |

@@ -4,13 +4,15 @@
  * Loads `manifest.json` (logical asset name -> emitted file under `out/media/`), installs the
  * `__extAssetUrl(name)` global the build's asset-rewrite plugin emits, and prefetches the WASM
  * modules for the current format family. Font TTFs are NOT prefetched — font loaders
- * (`@betteroffice/fonts`, eigenpal `fonts` prop) fetch their asset URLs on demand through
- * `connect-src`, which is scoped to the extension origin.
+ * (`@betteroffice/fonts`, the `@docx-editor.dev/react` byte-backed `fonts` prop) resolve their asset
+ * bytes on demand through `connect-src`, which is scoped to the extension origin.
  *
- * There are no engine workers anymore: xlsx/pptx run in-thread (their dists ship no workers) and
- * docx moved to the eigenpal DOM engine (no worker, no wasm). Only vsdx/xlsx/pptx wasm remains,
- * and each engine's `initWasm(bytes)` is fed from `getAssetBytes` — nothing is ever fetched from
- * a worker context (microsoft/vscode#315494 class of failures).
+ * There are no engine workers: xlsx/pptx run in-thread (their dists ship no workers), vsdx runs on
+ * the main thread, and docx moved to the `@docx-editor.dev` DOM engine. docx does have one wasm
+ * asset — `harfbuzz.wasm`, the same-origin HarfBuzz text shaper — which is prefetched here when
+ * present in the manifest like the other engines' wasm; each engine's `initWasm(bytes)` is fed from
+ * `getAssetBytes`, so nothing is ever fetched from a worker context (microsoft/vscode#315494 class
+ * of failures).
  */
 import type { ViewerWebviewConfig } from '../protocol';
 
@@ -90,7 +92,7 @@ async function loadManifest(mediaBase: string): Promise<AssetManifest> {
 	return manifest;
 }
 
-/** Prefetches wasm assets only; fonts resolve on demand through their own `src` URLs. */
+/** Prefetches wasm assets only; fonts resolve on demand through the asset bootstrap. */
 async function fetchWasmAssets(manifest: AssetManifest, mediaBase: string): Promise<void> {
 	const wasmEntries = Object.entries(manifest.assets).filter(([name]) => name.endsWith('.wasm'));
 	await Promise.all(
