@@ -15,11 +15,13 @@ high-fidelity WASM engines. No Office install, no server conversion, no telemetr
 ## Highlights
 
 - **Faithful rendering** — native OOXML engines (Rust/WASM for Excel, PowerPoint and Visio; a paginated
-  ProseMirror word processor for Word), with metric-compatible fonts bundled so pagination and line
-  breaks match Office.
-- **Fully offline** — every engine, font and asset ships inside the extension. Opening a file makes zero
-  network requests.
-- **Private by design** — no telemetry, no analytics, no crash reporting. Ever.
+  ProseMirror word processor for Word whose text shaping runs on a bundled HarfBuzz WASM asset), with
+  metric-compatible fonts bundled so pagination and line breaks match Office.
+- **Fully offline** — every engine, font and asset ships inside the extension; the Word shaper's single
+  WASM asset is served from the extension's own origin and no engine ships a worker. Opening a file makes
+  zero network requests.
+- **Private by design** — no telemetry, no analytics, no crash reporting, no collaboration or share
+  surface. Ever.
 - **Safe** — macros in `.docm/.xlsm/.pptm` are never executed; the webview runs under a strict CSP.
 - **Live reload** — change the file on disk (e.g. regenerate a report) and the open viewer refreshes.
 - **Theme aware** — follows your light/dark/high-contrast VS Code theme.
@@ -68,7 +70,9 @@ locally in a sandboxed webview. External links are opened only via an allowlist 
 [Apache-2.0](./LICENSE) © 2026 ahati.
 
 Built on the open-source [BetterOffice](https://github.com/openooxml/betteroffice) engines
-(Apache-2.0, © The OpenOOXML Project) — Rust/WASM DOCX, XLSX, PPTX and VSDX engines — and the
+(Apache-2.0, © The OpenOOXML Project) — Rust/WASM XLSX, PPTX and VSDX engines — the
+[@docx-editor.dev](https://github.com/eigenpal/docx-editor) Word editor (Apache-2.0, © EigenPal Inc.,
+text shaping via `harfbuzzjs`), and the
 [BetterOffice fonts](https://www.npmjs.com/package/@betteroffice/fonts) collection of open, metric-compatible
 font faces. See [NOTICE](./NOTICE) and [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md) for the full
 attribution record.
