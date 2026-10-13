@@ -2,7 +2,7 @@
   "name": "office-file-editor-viewer",
   "displayName": "Office File Editor & Viewer",
   "description": "Open Word, Excel, PowerPoint and Visio files with high-fidelity, fully offline WASM rendering — no telemetry.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "ahati",
   "license": "Apache-2.0",
   "private": true,
