@@ -37,6 +37,8 @@ Each copied crate keeps its `README.md` (referenced by `readme = "README.md"` in
 must stay resolvable. Rust `tests/`/`#[cfg(test)]` code is never compiled for the release wasm build.
 
 ## Local modifications
+- `vsdx-react/src/VsdxEditor.tsx`: `decodeImage` catches `createImageBitmap` rejections and returns `null` (dashed placeholder) instead of failing the whole render — Visio files commonly embed EMF/WMF metafiles that Chromium cannot decode.
+
 - `vsdx/src/wasm/loader.ts`: `initWasm` default parameter evaluated lazily after the memoization check (bare `initWasm()` from vsdx-react threw `import.meta`-relative URL construction in the IIFE webview bundle).
  (Apache-2.0 §4(b) — "modified files must carry prominent notices")
 

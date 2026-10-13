@@ -99,7 +99,11 @@ function VsdxViewer({ VsdxEditor, init, context, fonts }: VsdxViewerProps): JSX.
 					/* ignore */
 				}
 			}}
-			onError={(error) => context.fail('render', error)}
+			onError={(error) => {
+				// Degraded, not fatal: per-image decode failures and similar editor issues leave
+				// the document usable. Log for diagnostics; the editor shows its own state.
+				console.warn('[office-file-viewer] vsdx editor issue:', error);
+			}}
 		/>
 	);
 }
