@@ -195,13 +195,13 @@
     "build:vsdx-wasm": "node scripts/build-vsdx-wasm.mjs"
   },
   "dependencies": {
-    "@betteroffice/docx": "0.4.3",
-    "@betteroffice/docx-react": "0.4.3",
-    "@betteroffice/xlsx": "0.3.0",
-    "@betteroffice/xlsx-react": "0.3.0",
+    "@betteroffice/fonts": "0.4.0",
     "@betteroffice/pptx": "0.2.0",
     "@betteroffice/pptx-react": "0.2.0",
-    "@betteroffice/fonts": "0.4.0",
+    "@betteroffice/xlsx": "0.3.0",
+    "@betteroffice/xlsx-react": "0.3.0",
+    "@eigenpal/docx-editor-core": "1.9.0",
+    "@eigenpal/docx-editor-react": "1.9.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

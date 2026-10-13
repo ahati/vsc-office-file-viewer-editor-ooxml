@@ -9,7 +9,7 @@
  *   - the debounced `state { zoom, page }` message.
  *
  * Mounts are dynamically imported (`await import('../mounts/docx')`) so nothing from
- * `@betteroffice/*` is evaluated before `bootstrap()` installed `__extAssetUrl` / `__extWorkerUrl`.
+ * engines are evaluated before `bootstrap()` installed `__extAssetUrl`.
  */
 import { bootstrap, getTimings, recordTiming } from '../bootstrap/assetBootstrap';
 import { clearErrorPanel, renderErrorPanel, setStatus } from '../chrome/errorPanel';

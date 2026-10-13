@@ -1,31 +1,41 @@
 /**
- * docx adapter: mounts `DocxEditor` (from `@betteroffice/docx-react`) with the default chrome.
+ * docx adapter: mounts the eigenpal `DocxEditor` (`@eigenpal/docx-editor-react`).
  *
- * Prop names verified against `node_modules/@betteroffice/docx-react/dist/index.d.mts` and
- * https://docs.betteroffice.dev/docs/javascript:
- *   documentBuffer?: DocxInput (ArrayBuffer | Uint8Array | Blob | File)   readOnly?: boolean
- *   mode?: EditorMode ('editing' default | 'viewing' | 'suggesting')      showZoomControl?: boolean
- *   showRuler? showOutline? showToolbar? (omit = default chrome, null = none, false = hidden)
- *   showFileOpen?: boolean  showHelpMenu?: boolean  onSave?: (buffer: ArrayBuffer) => void
- *   onError?: (error: Error) => void  disableFindReplaceShortcuts?: boolean
- *   ref: DocxEditorRef { getZoom/setZoom, getCurrentPage, getTotalPages, findInDocument,
- *                        scrollToParaId, whenLayoutComplete, print }
+ * Why eigenpal (product decision, 2026-10): DOM + ProseMirror paginated word processor with
+ * lossless selective-rezip save (unsupported OOXML and embedded parts survive round-trips),
+ * editable by default, Apache-2.0, and a much smaller attack surface than a WASM engine
+ * (no wasm, no workers, no eval, zero `fetch(` in dist).
  *
- * Omitting `toolbar` renders the built-in toolbar (incl. its find/replace dialog, review and
- * outline chrome), which also renders in read-only mode; `showToolbar={false}` would hide the
- * whole region (the regression this file once had). Editing defaults on per `officeFileViewer.editing`;
- * saves arrive through `onSave` and are written by the extension host (lossless engine round-trip).
+ * OFFLINE CONTRACT (critical): the engine ships a Google Fonts CDN lookup that is ON by default.
+ * `setGoogleFontsEnabled(false)` below runs at MODULE EVALUATION time — before any document can
+ * parse — and permanently severs `fonts.googleapis.com` for this page. Font fidelity instead
+ * comes from our bundled metric-compatible faces handed to the `fonts` prop (see webview/fonts.ts).
+ *
+ * Prop names verified against `node_modules/@eigenpal/docx-editor-react/dist/index.d.ts`:
+ *   documentBuffer?: DocxInput (ArrayBuffer | Uint8Array | Blob | File)   documentName?: string
+ *   readOnly?: boolean (hides toolbar + rulers)   mode?: 'editing'|'suggesting'|'viewing'
+ *   colorMode?: 'light'|'dark'|'system'           showToolbar/showFileOpen/showHelpMenu?: boolean
+ *   showZoomControl?: boolean  showRuler?: boolean  showOutline?: boolean
+ *   fonts?: ReadonlyArray<FontDefinition>         onSave?: (buffer: ArrayBuffer) => void
+ *   onChange?: (document: Document) => void       onError?: (error: Error) => void
+ *   initialZoom?: number                          ref: DocxEditorRef (save/getZoom/getCurrentPage/…)
  */
-import '@betteroffice/docx-react/styles.css';
+import { setGoogleFontsEnabled } from '@eigenpal/docx-editor-core';
+import '@eigenpal/docx-editor-react/styles.css';
 import { useEffect, useRef } from 'react';
 import type { JSX } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { DocxEditorRef } from '@betteroffice/docx-react';
+import type { DocxEditorRef } from '@eigenpal/docx-editor-react';
 import type { ViewerContext, ViewerInit } from '../bootstrap/entryRuntime';
 import { resolveHost } from '../chrome/errorPanel';
-import { configureDocxFonts } from '../fonts';
+import { loadDocxFontDefinitions } from '../fonts';
 
-type DocxEditorComponent = typeof import('@betteroffice/docx-react')['DocxEditor'];
+// Offline kill switch — MUST run before any editor mounts or document parses. The engine's
+// Google Fonts lookup is page-global and defaults to enabled; this is the only network egress
+// the docx engine can ever perform (see webview/fonts.ts for the offline font substitute).
+setGoogleFontsEnabled(false);
+
+type DocxEditorComponent = typeof import('@eigenpal/docx-editor-react')['DocxEditor'];
 
 /** State polling interval for `state { zoom, page }` (the debounce in the entry runtime is 500 ms). */
 const STATE_POLL_MS = 1_000;
@@ -45,26 +55,26 @@ function ensureReactRoot(): ReturnType<typeof createRoot> {
 	return reactRoot;
 }
 
-/** Mounts (or re-renders) the docx viewer for one `init` payload. */
+/** Mounts (or re-renders) the docx editor for one `init` payload. */
 export async function mountDocx(init: ViewerInit, context: ViewerContext): Promise<void> {
-	// Fonts must be configured before the editor lays out (and before the dynamic import below,
-	// whose module scope resolves the bundled face table).
-	configureDocxFonts(init.config);
-	const { DocxEditor } = await import('@betteroffice/docx-react');
-	ensureReactRoot().render(<DocxViewer DocxEditor={DocxEditor} init={init} context={context} />);
+	const { DocxEditor } = await import('@eigenpal/docx-editor-react');
+	ensureReactRoot().render(
+		<DocxViewer DocxEditor={DocxEditor} init={init} context={context} fonts={await loadDocxFontDefinitions(init.config)} />,
+	);
 }
 
 interface DocxViewerProps {
 	DocxEditor: DocxEditorComponent;
 	init: ViewerInit;
 	context: ViewerContext;
+	fonts: Awaited<ReturnType<typeof loadDocxFontDefinitions>>;
 }
 
-function DocxViewer({ DocxEditor, init, context }: DocxViewerProps): JSX.Element {
+function DocxViewer({ DocxEditor, init, context, fonts }: DocxViewerProps): JSX.Element {
 	const ref = useRef<DocxEditorRef | null>(null);
 	const readOnly = !init.config.editing || init.config.forceReadOnly;
 
-	// `state { zoom, page }`: best effort, polled — the docx ref exposes getters only.
+	// `state { zoom, page }`: best effort, polled — the ref exposes getters only.
 	useEffect(() => {
 		const timer = setInterval(() => {
 			const editor = ref.current;
@@ -82,46 +92,44 @@ function DocxViewer({ DocxEditor, init, context }: DocxViewerProps): JSX.Element
 		return () => clearInterval(timer);
 	}, [context]);
 
-	// Restore the previous zoom/page once the document is laid out (zoom is a factor, not the setting).
+	// Restore the previous zoom/page once the document has laid out (best effort: the eigenpal
+	// ref has no layout-complete promise, so retry until the page count is non-zero).
 	useEffect(() => {
 		const editor = ref.current;
 		if (!editor) return;
 		if (!context.hasSavedZoom() && context.getSavedPage(1) === 1) return;
-		let cancelled = false;
-		void editor
-			.whenLayoutComplete({ timeoutMs: 30_000 })
-			.then(() => {
-				if (cancelled) return;
-				if (context.hasSavedZoom()) ref.current?.setZoom(context.getInitialZoom(1));
-				const page = context.getSavedPage(1);
-				if (page > 1) ref.current?.scrollToPage(page);
-			})
-			.catch(() => {
-				/* layout failures are surfaced by onError */
-			});
-		return () => {
-			cancelled = true;
-		};
+		let attempts = 0;
+		const timer = setInterval(() => {
+			attempts += 1;
+			const ready = editor.getTotalPages() > 0;
+			if (!ready && attempts < 60) return;
+			clearInterval(timer);
+			if (!ready) return;
+			if (context.hasSavedZoom()) editor.setZoom(context.getInitialZoom(1));
+			const page = context.getSavedPage(1);
+			if (page > 1) editor.scrollToPage(page);
+		}, 500);
+		return () => clearInterval(timer);
 	}, [context]);
 
 	return (
-		<>
-			<DocxEditor
-				ref={ref}
-				documentBuffer={init.bytes}
-				// No `fileName` prop on DocxEditor: the title bar uses `documentName`.
-				documentName={init.fileName}
-				readOnly={readOnly}
-				{...(readOnly ? { mode: 'viewing' as const } : {})}
-				showZoomControl
-				showRuler
-				showOutline
-				showFileOpen={false}
-				showHelpMenu={false}
-				onSave={(buffer) => context.saveBytes(buffer)}
-				onError={(error) => context.fail('render', error)}
-			/>
-		</>
+		<DocxEditor
+			ref={ref}
+			documentBuffer={init.bytes}
+			documentName={init.fileName}
+			readOnly={readOnly}
+			mode={readOnly ? 'viewing' : 'editing'}
+			// Word documents are white-paper artifacts; keep the editing surface light even in dark
+			// VS Code themes (the surrounding chrome still follows the editor theme).
+			colorMode="light"
+			showZoomControl
+			showRuler={!readOnly}
+			showOutline
+			showFileOpen={false}
+			showHelpMenu={false}
+			fonts={fonts}
+			onSave={(buffer) => context.saveBytes(buffer)}
+			onError={(error) => context.fail('render', error)}
+		/>
 	);
 }
-

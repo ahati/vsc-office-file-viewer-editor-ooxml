@@ -5,8 +5,6 @@
  * Targets
  *   host     src/extension.ts                    -> out/extension.js        (CJS, node, external: vscode)
  *   webview  webview/entries/{docx,xlsx,pptx,vsdx}.ts -> out/media/webview-*.js (IIFE, browser)
- *   workers  webview/entries/worker-docx.ts -> out/media/workers/worker-docx.js (IIFE, self-contained)
- *            (only docx ships an engine worker: xlsx/pptx run their session in-thread)
  *   assets   every engine wasm + bundled font TTF -> out/media/assets/*       (verbatim copy, see copyAssets)
  *
  * Plugins
@@ -17,7 +15,7 @@
  *                         vendor/betteroffice/vsdx/src/wasm/generated/vsdx_wasm.js.
  *
  * Post-build
- *   out/media/manifest.json  {"assets": {<basename>: "assets/<file>"}, "workers": {"docx": ...}}
+ *   out/media/manifest.json  {"assets": {<basename>: "assets/<file>"}}
  *
  * Usage: node scripts/build.mjs [--watch] [--production]
  */
@@ -52,17 +50,12 @@ const ASSET_GLOBS = [
 const ASSET_EXTENSIONS = new Set(['.wasm', '.ttf', '.otf', '.woff', '.woff2']);
 
 /**
- * Logical worker name -> engine. Keyed by the upstream worker module basename.
- *
- * Verified 2026-10 against the published packages: `@betteroffice/docx@0.4.3` ships
- * `dist/yrs/residentEngineWorker.mjs`, while `@betteroffice/xlsx@0.3.0` and `@betteroffice/pptx@0.2.0`
- * contain no worker anywhere (their React editors run the session in-thread and take the wasm bytes
- * through `initWasm(bytes)`), so only docx has a worker bundle.
+/**
+ * Legacy hook: the docx engine worker (and its URL rewrite) went away when docx moved to the
+ * eigenpal DOM engine. Kept as an empty map so the rewrite plugin stays generic; no engine in
+ * the current dependency tree spawns a worker.
  */
-const WORKER_LOGICAL_NAMES = {
-	residentEngineWorker: 'docx',
-};
-const WORKER_OUTPUTS = { docx: 'workers/worker-docx.js' };
+const WORKER_LOGICAL_NAMES = {};
 
 const VSDX_WASM_JS = 'vendor/betteroffice/vsdx/src/wasm/generated/vsdx_wasm.js';
 const VSDX_WASM_DTS = 'vendor/betteroffice/vsdx/src/wasm/generated/vsdx_wasm.d.ts';
@@ -251,19 +244,6 @@ const webviewConfig = {
 	plugins: [assetImportRewrite, vsdxGeneratedStub],
 };
 
-const workerEntries = ['docx'].map((format) => ({
-	in: fromRoot(`webview/entries/worker-${format}.ts`),
-	out: `worker-${format}`,
-}));
-
-/**
- * Engine workers are self-contained IIFE bundles: everything the worker module reaches (chunks,
- * fonts) is inlined, and its wasm lookups are rewritten to `__extAssetUrl(...)` calls served by the
- * `workerFetchShim` preamble from bytes posted by the webview main thread.
- *
- * `assetNames` points at the sibling `out/media/assets` directory so worker builds and webview
- * builds share one copy of each asset instead of duplicating ~50 MB under out/media/workers/.
- */
 /**
  * Integration-test bundle: `src/test-integration/index.ts` -> `out/test/integration.js`.
  *
@@ -282,26 +262,6 @@ const integrationTestConfig = {
 	outdir: fromRoot('out'),
 	sourcemap: !production,
 	logLevel: 'warning',
-};
-
-/** @type {esbuild.BuildOptions} */
-const workerConfig = {
-	entryPoints: workerEntries,
-	bundle: true,
-	format: 'iife',
-	platform: 'browser',
-	target: 'es2020',
-	jsx: 'automatic',
-	jsxImportSource: 'react',
-	outdir: fromRoot('out/media/workers'),
-	entryNames: '[name]',
-	assetNames: '../assets/[name]',
-	loader: { '.wasm': 'file', '.ttf': 'file' },
-	metafile: true,
-	sourcemap: !production,
-	minify: production,
-	logLevel: 'warning',
-	plugins: [assetImportRewrite, vsdxGeneratedStub],
 };
 
 /** Recursively collects files with one of ASSET_EXTENSIONS under `dir`. */
@@ -399,16 +359,12 @@ async function writeManifest(copiedAssets, metafiles, { check = true } = {}) {
 
 	const manifest = {
 		assets: Object.fromEntries([...assets.entries()].sort(([a], [b]) => a.localeCompare(b))),
-		workers: { ...WORKER_OUTPUTS },
 	};
 
 	if (check) {
 		const missing = [];
 		for (const [key, relPath] of Object.entries(manifest.assets)) {
 			if (!existsSync(fromRoot('out/media', relPath))) missing.push(`${key} -> ${relPath}`);
-		}
-		for (const [logical, relPath] of Object.entries(manifest.workers)) {
-			if (!existsSync(fromRoot('out/media', relPath))) missing.push(`worker:${logical} -> ${relPath}`);
 		}
 		if (missing.length > 0) {
 			throw new Error(`manifest.json references missing build outputs:\n  ${missing.join('\n  ')}`);
@@ -422,80 +378,21 @@ async function writeManifest(copiedAssets, metafiles, { check = true } = {}) {
 
 /* ------------------------------------------------------------------ postchecks */
 
-/**
- * Removes worker bundles a previous build emitted for formats that have no engine worker anymore
- * (xlsx/pptx). Without this, `out/media/workers/` keeps stale bundles that the manifest does not
- * list — and those are exactly what a loader would try to spawn.
- */
-async function cleanStaleWorkerOutputs() {
-	const workerDir = fromRoot('out/media/workers');
-	if (!existsSync(workerDir)) return;
-	const expected = new Set(Object.values(WORKER_OUTPUTS).map((relPath) => path.basename(relPath)));
-	for (const file of await readdir(workerDir)) {
-		const isMap = file.endsWith('.map');
-		const logical = isMap ? file.slice(0, -'.map'.length) : file;
-		if (expected.has(logical)) continue;
-		await rm(path.join(workerDir, file), { force: true });
-		console.log(`[build] removed stale worker bundle: out/media/workers/${file}`);
-	}
-}
-
-/**
- * Guards the worker contract: self-contained bundles must not contain runtime relative-URL lookups
- * for wasm/workers and must not contain dynamic imports (both break inside blob: webview workers),
- * and every worker must carry the `ext-assets` preamble handshake (`workerFetchShim.ts`).
- */
-async function verifyWorkerBundles() {
-	const problems = [];
-	for (const [logical, relPath] of Object.entries(WORKER_OUTPUTS)) {
-		const file = fromRoot('out/media', relPath);
-		if (!existsSync(file)) {
-			problems.push(`${relPath} was not emitted`);
-			continue;
-		}
-		const code = await readFile(file, 'utf8');
-		for (const m of code.matchAll(/new URL\([^)]*\)/g)) {
-			if (/\.(?:wasm|mjs|ttf)/.test(m[0])) problems.push(`${relPath} (${logical}): leftover ${m[0]}`);
-		}
-		if (/(^|[^\w.$])import\s*\(/.test(code)) {
-			problems.push(`${relPath} (${logical}): dynamic import() survived bundling`);
-		}
-		if (!code.includes('ext-assets')) {
-			problems.push(`${relPath} (${logical}): missing the 'ext-assets' fetch-shim handshake`);
-		}
-	}
-	// A worker bundle emitted for a format whose package ships no worker means a stale entry file.
-	const workerDir = fromRoot('out/media/workers');
-	if (existsSync(workerDir)) {
-		const expected = new Set(Object.values(WORKER_OUTPUTS).map((relPath) => path.basename(relPath)));
-		for (const file of await readdir(workerDir)) {
-			const logical = file.endsWith('.map') ? file.slice(0, -'.map'.length) : file;
-			if (!expected.has(logical)) problems.push(`out/media/workers/${file} is not in the manifest workers map`);
-		}
-	}
-	if (problems.length > 0) {
-		throw new Error(`worker bundle verification failed:\n  ${problems.join('\n  ')}`);
-	}
-}
-
 /* -------------------------------------------------------------------- driver */
 
 async function buildOnce() {
-	await cleanStaleWorkerOutputs();
 	const copiedAssets = await copyAssets();
 
 	const host = await esbuild.build(hostConfig);
 	const webviews = await esbuild.build(webviewConfig);
-	const workers = await esbuild.build(workerConfig);
 	await esbuild.build(integrationTestConfig);
 
-	const manifest = await writeManifest(copiedAssets, [webviews.metafile, workers.metafile]);
-	await verifyWorkerBundles();
+	const manifest = await writeManifest(copiedAssets, [webviews.metafile]);
 
 	const assetCount = Object.keys(manifest.assets).length;
 	console.log(
 		`[build]${production ? ' production' : ''} host + ${webviewEntries.length} webviews + ` +
-			`${workerEntries.length} workers + ${assetCount} assets -> out/`,
+			`${assetCount} assets -> out/`,
 	);
 	return { host, manifest };
 }
@@ -508,11 +405,10 @@ async function startWatch() {
 	const contexts = await Promise.all([
 		esbuild.context(hostConfig),
 		esbuild.context(webviewConfig),
-		esbuild.context(workerConfig),
 		esbuild.context(integrationTestConfig),
 	]);
 	await Promise.all(contexts.map((context) => context.watch()));
-	console.log('[build] watching (host, webviews, workers, integration tests)');
+	console.log('[build] watching (host, webviews, integration tests)');
 }
 
 try {

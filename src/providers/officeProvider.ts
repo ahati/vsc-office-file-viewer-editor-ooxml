@@ -360,7 +360,9 @@ export function buildContentSecurityPolicy(cspSource: string, nonce: string, cjk
 		`base-uri ${cspSource};`,
 		`img-src ${cspSource} data: blob:;`,
 		`media-src ${cspSource} blob:;`,
-		`font-src ${cspSource}${extra};`,
+		// font-src blob: — the docx engine registers DOCX-embedded fonts as blob @font-face rules
+		// (eigenpal fontLoader) and synthesized faces may resolve through blob URLs too.
+		`font-src ${cspSource} blob:${extra};`,
 		`script-src 'nonce-${nonce}' 'wasm-unsafe-eval'${extra};`,
 		`worker-src data: blob:;`,
 		`style-src ${cspSource} 'unsafe-inline'${extra};`,

@@ -2,10 +2,9 @@
  * Webview globals and module wildcards available to webview-side sources (extended for the engine
  * adapter milestone).
  *
- * `__extAssetUrl` / `__extWorkerUrl` are injected by the build (scripts/build.mjs,
+ * `__extAssetUrl` are injected by the build (scripts/build.mjs,
  * `asset-import-rewrite`) into the engines' bundle-time asset lookups:
  *   - webview main thread: defined by `webview/bootstrap/assetBootstrap.ts` (manifest-driven),
- *   - engine worker:       defined by `webview/bootstrap/workerFetchShim.ts` (`ext-asset://` scheme,
  *                          served from the bytes the main thread posted).
  */
 
@@ -18,7 +17,6 @@ declare global {
 	 */
 	var __extAssetUrl: ((name: string, fallbackUrl?: string) => string) | undefined;
 	/** Resolves a logical engine worker name to a blob/data URL that can be passed to `new Worker`. */
-	var __extWorkerUrl: ((logical: 'docx' | 'xlsx' | 'pptx') => string) | undefined;
 	/**
 	 * Format of this webview, set by the extension host's HTML (`src/providers/officeProvider.ts`)
 	 * before the entry bundle runs. Used to skip work that belongs to another format (e.g. the docx

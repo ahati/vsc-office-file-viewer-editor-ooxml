@@ -7,15 +7,16 @@ high-fidelity WASM engines. No Office install, no server conversion, no telemetr
 
 | Format | Extensions | What you get |
 |---|---|---|
-| Word | `.docx` `.docm` | Paged canvas rendering with headers/footers, footnotes, tables, tracked-changes & comment cards, text selection & copy |
+| Word | `.docx` `.docm` | Paged editing surface with headers/footers, footnotes, tables, tracked changes & comment cards, text selection & copy |
 | Excel | `.xlsx` `.xlsm` | Sheet tabs, formulas (cached values), merged cells, frozen panes, cell selection & copy, zoom |
 | PowerPoint | `.pptx` `.pptm` | Slide canvas with masters, images, speaker notes, thumbnail rail, slide navigation |
 | Visio | `.vsdx` | Multi-page diagrams with connectors, themes and layer visibility, page tabs, pan & zoom |
 
 ## Highlights
 
-- **Faithful rendering** — Rust/WASM engines built from the OOXML formats up, with metric-compatible
-  fonts bundled so pagination and line breaks match Office (exact page counts on the upstream fidelity corpus).
+- **Faithful rendering** — native OOXML engines (Rust/WASM for Excel, PowerPoint and Visio; a paginated
+  ProseMirror word processor for Word), with metric-compatible fonts bundled so pagination and line
+  breaks match Office.
 - **Fully offline** — every engine, font and asset ships inside the extension. Opening a file makes zero
   network requests.
 - **Private by design** — no telemetry, no analytics, no crash reporting. Ever.
