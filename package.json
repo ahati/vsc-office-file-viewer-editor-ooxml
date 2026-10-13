@@ -2,15 +2,19 @@
   "name": "office-file-editor-viewer",
   "displayName": "Office File Editor & Viewer",
   "description": "Open Word, Excel, PowerPoint and Visio files with high-fidelity, fully offline WASM rendering — no telemetry.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "ahati",
   "license": "Apache-2.0",
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/ahati/vsc-office-file-viewer-editor-ooxml.git"
+    "url": "https://github.com/ahati/vsc-office-file-viewer-editor-ooxml"
   },
   "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1E222B",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
