@@ -113,8 +113,8 @@ npm run build:vsdx-wasm  # rebuild the vendored Visio WASM (needs the Rust toolc
 ```
 
 The production build runs a **no-egress / no-collaboration postcheck** over every shipped bundle
-and fails the build on violations — see `docs/MIGRATION-DOCX-EDITOR-2X.md` §2 for the audit that
-defines the contract. `docs/SCOPING.md` documents the architecture.
+and fails the build on violations — the build itself is the enforcement (see the
+Privacy & offline guarantees section above). `docs/SCOPING.md` documents the architecture.
 
 ## License & third-party attribution
 

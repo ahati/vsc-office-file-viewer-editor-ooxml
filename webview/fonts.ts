@@ -1,5 +1,5 @@
 /**
- * Per-format font wiring (DESIGN §8, SCOPING §6; MIGRATION-DOCX-EDITOR-2X §4).
+ * Per-format font wiring (DESIGN §8, SCOPING §6).
  *
  * - docx (@docx-editor.dev/* 2.29.0): the editor takes BYTES — a `FontConfigurationFragment`
  *   (`{ supportedFamilies, sources }`) whose sources are built with `createFontSource`. We resolve

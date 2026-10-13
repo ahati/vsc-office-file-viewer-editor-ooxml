@@ -6,7 +6,8 @@
  * font we hand to the engine is byte-backed (see webview/fonts.ts), so there is no URL for the
  * engine to fetch on demand. HarfBuzz shaping loads `harfbuzz.wasm` as a same-origin extension
  * asset from the build's asset manifest; the engine dists contain no workers, no dynamic
- * imports and no telemetry (docs/MIGRATION-DOCX-EDITOR-2X.md §2). Readers are: (1) no egress by
+ * imports and no telemetry (audited against the shipped 2.29.0 dists; enforced by the build's
+ * no-egress postcheck). Readers are: (1) no egress by
  * construction — bytes-only sources, no modules, no resolver that fetches; (2) the webview CSP
  * (`script-src 'wasm-unsafe-eval'`, `connect-src <ext-origin> data: blob:`);
  * (3) the build's no-egress/no-collaboration bundle postcheck.

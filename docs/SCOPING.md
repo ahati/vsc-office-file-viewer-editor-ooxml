@@ -16,7 +16,7 @@ VS Code docs/issues, and marketplace crawl — details inline.
 | **What** | Read-only high-fidelity viewers for `.docx/.docm`, `.xlsx/.xlsm`, `.pptx/.pptm`, **`.vsdx`** as VS Code custom editors |
 | **Engine** | Word: `@docx-editor.dev/{core,react}` 2.29.0 (npm, Apache-2.0, DOM/ProseMirror paginated editor; replaced the interim `@betteroffice/docx`); `@betteroffice/{xlsx,pptx}` (npm, Apache-2.0, Rust→WASM) + `@betteroffice/vsdx` (vendored from source — not yet on npm) |
 | **Rendering** | Paged DOM/ProseMirror surface for Word; canvas 2D via each engine's React editor for xlsx/pptx; thin custom canvas shell for vsdx |
-| **Network** | Zero by default; fonts bundled from `@betteroffice/fonts` (replaces the old Google-Fonts opt-in). Word shapes text with one bundled `harfbuzz.wasm` served same-origin — no engine ships a worker, no collaboration surface, no telemetry (audit: `docs/MIGRATION-DOCX-EDITOR-2X.md` §2) |
+| **Network** | Zero by default; fonts bundled from `@betteroffice/fonts` (replaces the old Google-Fonts opt-in). Word shapes text with one bundled `harfbuzz.wasm` served same-origin — no engine ships a worker, no collaboration surface, no telemetry (enforced by build-time no-egress postchecks) |
 | **License** | **Apache-2.0 recommended** (§7) — upstream is Apache-2.0 with NOTICE obligations |
 | **Size budget** | ~20–30 MB VSIX (≈17 MB raw WASM + 15 MB fonts + JS; the 30 MB `@betteroffice/docx` engine wasm went away with the Word engine swap) — well under marketplace limits (§9) |
 
@@ -39,7 +39,7 @@ the only existing vsdx viewer has 446 installs and self-documented fidelity gaps
 - **Offline by default:** no WebSocket/XHR/EventSource anywhere in `packages/*/src`; collaboration is strictly
   transport-injected (we simply don't inject one). The only network path in the whole stack is the optional
   `@betteroffice/fonts/cdn` provider (pinned jsdelivr) — we won't use it unless the user opts in.
-  For Word, the 2.x audit (`docs/MIGRATION-DOCX-EDITOR-2X.md` §2) confirms the same posture: no
+  For Word, an audit of the shipped 2.29.0 dists confirms the same posture: no
   WebSocket/sendBeacon/EventSource/`new Worker`/analytics strings in the `@docx-editor.dev` dists, no Google-Fonts
   origin (the API is gone; we pass font bytes), the only `fetch` is the same-origin `harfbuzz.wasm` lookup, and the
   `yjs`/`pdf-lib` peers of the unused collaboration / PDF-export entrypoints are never imported or bundled.
