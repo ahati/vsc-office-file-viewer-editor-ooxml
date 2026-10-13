@@ -102,7 +102,7 @@
         "officeFileViewer.editing": {
           "type": "boolean",
           "default": true,
-          "description": "Open OOXML files editable (editing ships in a later milestone; reserved)."
+          "description": "Open documents editable (Word: full editing with lossless save). Turn off to open everything read-only."
         },
         "officeFileViewer.fonts": {
           "type": "string",
