@@ -36,7 +36,8 @@ export type WebviewToHost =
 	| { type: 'loaded'; fileName: string; timings: Record<string, number> }
 	| { type: 'load-error'; phase: string; message: string }
 	| { type: 'link'; url: string }
-	| { type: 'state'; state: Record<string, unknown> };
+	| { type: 'state'; state: Record<string, unknown> }
+	| { type: 'saved'; bytes: ArrayBuffer }; // lossless engine save (Ctrl/Cmd+S in the editor chrome)
 
 /*
  * M2 (editing) messages — reserved placeholders, do not implement yet:

@@ -21,6 +21,9 @@ export class OfficeDocument implements vscode.CustomDocument {
 		public data: Uint8Array,
 	) {}
 
+	/** Timestamp until which `fileChanged` events are our own save echo (see `resolveCustomEditor`). */
+	suppressReloadUntil = 0;
+
 	dispose(): void {
 		this._onDidDispose.fire();
 		this._onDidDispose.dispose();
@@ -162,6 +165,25 @@ export class OfficeProvider implements vscode.CustomReadonlyEditorProvider<Offic
 				case 'link':
 					void openExternalLink(msg.url);
 					return;
+				case 'saved': {
+					// Lossless engine save from the editor chrome (Ctrl/Cmd+S): write through
+					// `workspace.fs`, then swallow the watcher echo of our own write.
+					const raw = msg.bytes as ArrayBuffer | Uint8Array | undefined;
+					if (!(raw instanceof ArrayBuffer) && !(raw instanceof Uint8Array)) return;
+					const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+					document.data = bytes;
+					document.suppressReloadUntil = Date.now() + 2_000;
+					void Promise.resolve(vscode.workspace.fs.writeFile(document.uri, bytes))
+						.then(() => OfficeProvider.log(`saved ${document.uri.toString()} (${bytes.byteLength} bytes)`))
+						.catch((error: unknown) => {
+							document.suppressReloadUntil = 0;
+							OfficeProvider.log(`save FAILED for ${document.uri.toString()}: ${String(error)}`);
+							void vscode.window.showErrorMessage(
+								`Office File Viewer: could not save ${document.uri.fsPath}: ${String(error)}`,
+							);
+						});
+					return;
+				}
 				case 'state':
 					// Viewer state (scroll/zoom/page) is not persisted yet; M1 only traces it.
 					OfficeProvider.log(`state ${document.uri.toString()}: ${JSON.stringify(msg.state ?? {})}`);
@@ -181,6 +203,10 @@ export class OfficeProvider implements vscode.CustomReadonlyEditorProvider<Offic
 		};
 		const changeSubscription = watcher.onDidChange((changed) => {
 			if (changed.toString() !== document.uri.toString()) return;
+			if (Date.now() < document.suppressReloadUntil) {
+				OfficeProvider.log(`ignored own save echo: ${document.uri.toString()}`);
+				return;
+			}
 			OfficeProvider.log(`file changed on disk: ${document.uri.toString()}`);
 			void sendInit();
 		});

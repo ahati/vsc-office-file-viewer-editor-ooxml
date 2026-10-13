@@ -34,8 +34,8 @@ function ensureReactRoot(): ReturnType<typeof createRoot> {
 	const host = resolveHost();
 	if (!host) throw new Error('webview host element (#viewer-root) is missing');
 	if (!reactRoot) {
-		const container = host.querySelector<HTMLElement>('#bo-pptx-mount') ?? host.appendChild(document.createElement('div'));
-		container.id = 'bo-pptx-mount';
+		const container = host.querySelector<HTMLElement>('#office-pptx-mount') ?? host.appendChild(document.createElement('div'));
+		container.id = 'office-pptx-mount';
 		container.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;min-height:0';
 		reactRoot = createRoot(container);
 	}
@@ -94,8 +94,8 @@ function PptxViewer({ PptxEditor, fonts, init, context }: PptxViewerProps): JSX.
 				fonts={fonts}
 				fileName={init.fileName}
 				initialSlide={context.getSavedPage(1)}
-				readOnly
-				showToolbar={false}
+				readOnly={!init.config.editing || init.config.forceReadOnly}
+				onSave={(bytes) => context.saveBytes(bytes)}
 				onReady={(api) => {
 					apiRef.current = api;
 				}}

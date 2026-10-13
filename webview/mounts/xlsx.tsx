@@ -30,8 +30,8 @@ function ensureReactRoot(): ReturnType<typeof createRoot> {
 	const host = resolveHost();
 	if (!host) throw new Error('webview host element (#viewer-root) is missing');
 	if (!reactRoot) {
-		const container = host.querySelector<HTMLElement>('#bo-xlsx-mount') ?? host.appendChild(document.createElement('div'));
-		container.id = 'bo-xlsx-mount';
+		const container = host.querySelector<HTMLElement>('#office-xlsx-mount') ?? host.appendChild(document.createElement('div'));
+		container.id = 'office-xlsx-mount';
 		container.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;min-height:0';
 		reactRoot = createRoot(container);
 	}
@@ -78,8 +78,8 @@ function XlsxViewer({ XlsxEditor, init, context }: XlsxViewerProps): JSX.Element
 			<XlsxEditor
 				file={new Uint8Array(init.bytes)}
 				fileName={init.fileName}
-				readOnly
-				showToolbar={false}
+				readOnly={!init.config.editing || init.config.forceReadOnly}
+				onSave={(bytes) => context.saveBytes(bytes)}
 				onReady={(api) => {
 					apiRef.current = api;
 				}}

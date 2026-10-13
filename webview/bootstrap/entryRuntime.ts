@@ -32,6 +32,8 @@ export interface ViewerContext {
 	config: ViewerWebviewConfig;
 	/** Reports a render/runtime failure: posts `load-error` and shows the error panel. */
 	fail(phase: string, error: unknown): void;
+	/** Delivers a lossless engine save (`onSave` chrome callback) to the host, which writes the file. */
+	saveBytes(bytes: ArrayBuffer | Uint8Array): void;
 	/** Debounced (500 ms) `state { zoom, page }` message (DESIGN §9). */
 	reportState(state: { zoom?: number; page?: number; pageCount?: number }): void;
 	/** Restores the previous zoom from the webview state, if the host preserved it. */
@@ -102,6 +104,14 @@ export function runViewerEntry(options: EntryOptions): void {
 		fileName: '',
 		config: undefined as unknown as ViewerWebviewConfig,
 		fail,
+		saveBytes(bytes) {
+			// Normalize to a plain ArrayBuffer for the structured clone (docx hands us an ArrayBuffer,
+			// xlsx/pptx hand us Uint8Array views into larger buffers).
+			const ab = bytes instanceof Uint8Array
+				? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+				: bytes;
+			post({ type: 'saved', bytes: ab as ArrayBuffer });
+		},
 		reportState(state) {
 			Object.assign(pendingState, state);
 			if (stateTimer !== undefined) clearTimeout(stateTimer);

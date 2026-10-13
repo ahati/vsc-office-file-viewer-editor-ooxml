@@ -1,17 +1,20 @@
 /**
- * docx adapter: mounts `DocxEditor` (from `@betteroffice/docx-react`) in read-only viewing mode.
+ * docx adapter: mounts `DocxEditor` (from `@betteroffice/docx-react`) with the default chrome.
  *
- * Prop names verified against `node_modules/@betteroffice/docx-react/dist/index.d.mts`:
+ * Prop names verified against `node_modules/@betteroffice/docx-react/dist/index.d.mts` and
+ * https://docs.betteroffice.dev/docs/javascript:
  *   documentBuffer?: DocxInput (ArrayBuffer | Uint8Array | Blob | File)   readOnly?: boolean
- *   mode?: EditorMode ('viewing')                                        showZoomControl?: boolean
- *   showRuler?: boolean  showToolbar?: boolean  showFileOpen?: boolean
+ *   mode?: EditorMode ('editing' default | 'viewing' | 'suggesting')      showZoomControl?: boolean
+ *   showRuler? showOutline? showToolbar? (omit = default chrome, null = none, false = hidden)
+ *   showFileOpen?: boolean  showHelpMenu?: boolean  onSave?: (buffer: ArrayBuffer) => void
  *   onError?: (error: Error) => void  disableFindReplaceShortcuts?: boolean
  *   ref: DocxEditorRef { getZoom/setZoom, getCurrentPage, getTotalPages, findInDocument,
  *                        scrollToParaId, whenLayoutComplete, print }
  *
- * The editor's own find UI is superseded by the shared find bar (`chrome/FindBar.tsx`), which uses
- * `findInDocument` + `scrollToParaId` — `DocxEditorRef.findText` needs a story/scope + view pair
- * that a plain find bar cannot supply and is meant for scripted edits.
+ * Omitting `toolbar` renders the built-in toolbar (incl. its find/replace dialog, review and
+ * outline chrome), which also renders in read-only mode; `showToolbar={false}` would hide the
+ * whole region (the regression this file once had). Editing defaults on per `officeFileViewer.editing`;
+ * saves arrive through `onSave` and are written by the extension host (lossless engine round-trip).
  */
 import '@betteroffice/docx-react/styles.css';
 import { useEffect, useRef } from 'react';
@@ -20,7 +23,6 @@ import { createRoot } from 'react-dom/client';
 import type { DocxEditorRef } from '@betteroffice/docx-react';
 import type { ViewerContext, ViewerInit } from '../bootstrap/entryRuntime';
 import { resolveHost } from '../chrome/errorPanel';
-import { FindBar, type FindAdapter, type FindOutcome } from '../chrome/FindBar';
 import { configureDocxFonts } from '../fonts';
 
 type DocxEditorComponent = typeof import('@betteroffice/docx-react')['DocxEditor'];
@@ -35,8 +37,8 @@ function ensureReactRoot(): ReturnType<typeof createRoot> {
 	if (!host) throw new Error('webview host element (#viewer-root) is missing');
 	if (!reactRoot) {
 		// Keep the host's #status overlay in place: mount into a dedicated child.
-		const container = host.querySelector<HTMLElement>('#bo-docx-mount') ?? host.appendChild(document.createElement('div'));
-		container.id = 'bo-docx-mount';
+		const container = host.querySelector<HTMLElement>('#office-docx-mount') ?? host.appendChild(document.createElement('div'));
+		container.id = 'office-docx-mount';
 		container.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;min-height:0';
 		reactRoot = createRoot(container);
 	}
@@ -60,6 +62,7 @@ interface DocxViewerProps {
 
 function DocxViewer({ DocxEditor, init, context }: DocxViewerProps): JSX.Element {
 	const ref = useRef<DocxEditorRef | null>(null);
+	const readOnly = !init.config.editing || init.config.forceReadOnly;
 
 	// `state { zoom, page }`: best effort, polled — the docx ref exposes getters only.
 	useEffect(() => {
@@ -108,46 +111,17 @@ function DocxViewer({ DocxEditor, init, context }: DocxViewerProps): JSX.Element
 				documentBuffer={init.bytes}
 				// No `fileName` prop on DocxEditor: the title bar uses `documentName`.
 				documentName={init.fileName}
-				readOnly
-				mode="viewing"
+				readOnly={readOnly}
+				{...(readOnly ? { mode: 'viewing' as const } : {})}
 				showZoomControl
-				// readOnly hides the toolbar and rulers upstream, but pass them explicitly so the
-				// viewer chrome survives a future read-only/editing split.
 				showRuler
-				showToolbar={false}
+				showOutline
 				showFileOpen={false}
 				showHelpMenu={false}
-				// Give Ctrl/Cmd+F to our find bar instead of the editor's inline find UI.
-				disableFindReplaceShortcuts
+				onSave={(buffer) => context.saveBytes(buffer)}
 				onError={(error) => context.fail('render', error)}
 			/>
-			<FindBar adapter={createDocxFindAdapter(ref)} />
 		</>
 	);
 }
 
-/** `findInDocument` (case-insensitive substring) + `scrollToParaId` highlight, cycling per query. */
-function createDocxFindAdapter(ref: { current: DocxEditorRef | null }): FindAdapter {
-	let lastQuery = '';
-	let index = 0;
-	return {
-		async find(query: string): Promise<FindOutcome> {
-			const editor = ref.current;
-			if (!editor) return { count: 0, index: 0, error: 'editor not ready' };
-			if (query !== lastQuery) {
-				lastQuery = query;
-				index = 0;
-			}
-			const matches = editor.findInDocument(query, { limit: 500 });
-			if (matches.length === 0) return { count: 0, index: 0, truncated: false };
-			const current = matches[index % matches.length]!;
-			index += 1;
-			editor.scrollToParaId(current.paraId, { highlight: { color: 'rgba(255, 235, 59, 0.55)' } });
-			return { count: matches.length, index: ((index - 1) % matches.length) + 1, truncated: matches.length >= 500 };
-		},
-		clear(): void {
-			lastQuery = '';
-			index = 0;
-		},
-	};
-}

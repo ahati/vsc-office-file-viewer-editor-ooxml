@@ -5,3 +5,6 @@ out/
 
 # Rust/wasm-pack build output (vsdx vendored engine)
 target/
+
+# local test files (user-supplied samples, never committed)
+samples/architecture.vsdx

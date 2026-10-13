@@ -49,7 +49,9 @@ to switch back to the binary or text editor at any time.
 
 ## Known limitations
 
-- Read-only viewing (editing & saving are planned for an upcoming release).
+- Editing: documents open with the full editor chrome and `Ctrl/Cmd+S` performs a lossless in-place save.
+  VS Code-level dirty-state markers, hot-exit backup and external-change conflict prompts are planned for
+  an upcoming release — until then, undo history lives inside the open editor.
 - Visio: linear fill gradients and arc/gap line jumps render; exotic ShapeSheet features may differ from
   Visio. `.vsdm/.vstx/.vssx` and legacy `.vsd` are not supported.
 - CJK text renders with substituted font metrics unless `officeFileViewer.cjkFonts: "cdn"` is enabled.
