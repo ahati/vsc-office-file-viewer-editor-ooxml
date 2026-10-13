@@ -309,7 +309,7 @@ export class OfficeProvider implements vscode.CustomReadonlyEditorProvider<Offic
 		<div id="status" data-state="busy"><div class="spinner"></div></div>
 	</div>
 	<script nonce="${nonce}">window.__BO_FORMAT__ = ${JSON.stringify(format)};</script>
-	<script nonce="${nonce}" src="${scriptUri}"></script>
+	<script type="module" nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
 	}

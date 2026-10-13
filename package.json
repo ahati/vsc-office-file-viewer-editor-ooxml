@@ -136,6 +136,16 @@
           "type": "boolean",
           "default": false,
           "description": "Always open documents read-only, regardless of the editing setting."
+        },
+        "officeFileViewer.colorMode": {
+          "type": "string",
+          "enum": [
+            "light",
+            "dark",
+            "system"
+          ],
+          "default": "light",
+          "description": "Editor chrome color mode for Word documents. The document canvas always stays Word-faithful (white)."
         }
       }
     },

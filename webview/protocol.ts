@@ -16,6 +16,8 @@ export interface ViewerWebviewConfig {
 	fonts: 'bundled' | 'off';
 	cjkFonts: 'off' | 'cdn';
 	initialZoom: 'fitPage' | 'fitWidth' | '100';
+	/** Editor chrome color mode (the document canvas stays light in every mode). */
+	colorMode: 'light' | 'dark' | 'system';
 }
 
 export type HostToWebview =

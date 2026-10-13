@@ -40,6 +40,10 @@ const ASSET_GLOBS = [
 	'node_modules/@betteroffice/xlsx/dist/generated',
 	'node_modules/@betteroffice/pptx/dist/generated',
 	'node_modules/@betteroffice/fonts/assets',
+	// docx 2.x (plan §3.2): the HarfBuzz WASM shaping asset. It is resolved by the core dist as
+	// `new URL("harfbuzz.wasm", import.meta.url)` (rewritten by assetImportRewrite below) and must
+	// also be reachable through the manifest for `__extAssetUrl('harfbuzz.wasm')`.
+	'node_modules/@docx-editor.dev/core/dist',
 	// Vendored vsdx wasm-bindgen output (DESIGN §7.2): `vsdx_wasm_bg.wasm` is produced by
 	// `npm run build:vsdx-wasm`, is loaded through the manifest by `webview/entries/vsdx.ts`
 	// (`getAssetBytes('vsdx_wasm_bg.wasm')`) and is NOT reachable through the esbuild import graph
@@ -80,7 +84,7 @@ const VSDX_WASM_DTS = 'vendor/betteroffice/vsdx/src/wasm/generated/vsdx_wasm.d.t
 const assetImportRewrite = {
 	name: 'asset-import-rewrite',
 	setup(build) {
-		const filter = /[\\/](?:node_modules[\\/]@betteroffice[\\/]|vendor[\\/]).*\.(?:mjs|js|cjs)$/;
+		const filter = /[\\/](?:node_modules[\\/](?:@betteroffice|@docx-editor\.dev[\\/]core)[\\/]|vendor[\\/]).*\.(?:mjs|js|cjs)$/;
 		build.onLoad({ filter }, async (args) => {
 			// Non-JS files under these roots fall through to esbuild's own loaders.
 			if (!/\.(?:mjs|js|cjs)$/.test(args.path)) return undefined;
@@ -213,6 +217,11 @@ const hostConfig = {
 	logLevel: 'warning',
 };
 
+/**
+ * Webview bundles. All four are emitted as ESM: the 2.x docx core dist (also pulled in by the
+ * pptx engine) initializes HarfBuzz with a top-level `await`, which esbuild cannot express in an
+ * IIFE. The host loads them with `<script type="module">` (see `officeProvider.getHtmlForWebview`).
+ */
 const webviewEntries = ['docx', 'xlsx', 'pptx', 'vsdx'].map((format) => ({
 	in: fromRoot(`webview/entries/${format}.ts`),
 	out: `webview-${format}`,
@@ -222,9 +231,10 @@ const webviewEntries = ['docx', 'xlsx', 'pptx', 'vsdx'].map((format) => ({
 const webviewConfig = {
 	entryPoints: webviewEntries,
 	bundle: true,
-	format: 'iife',
+	format: 'esm',
 	platform: 'browser',
-	target: 'es2020',
+	// es2022: the docx 2.x core dist uses top-level `await` in its module scope (HarfBuzz init).
+	target: 'es2022',
 	// The webview sources use the automatic JSX runtime with an explicit syntax
 	// (`import { useEffect } from 'react'; import type { JSX } from 'react'`) — mirror
 	// `tsconfig.webview.json`'s `"jsx": "react-jsx"`. esbuild only discovers `tsconfig.json`
@@ -243,10 +253,6 @@ const webviewConfig = {
 	logLevel: 'warning',
 	plugins: [assetImportRewrite, vsdxGeneratedStub],
 	alias: {
-		// Collaboration/agent removal: the react package hard-imports AgentPanel from its agents
-		// package; the product never renders it, so alias it to a no-op stub (webview/bootstrap/agentsStub.ts).
-		'@eigenpal/docx-editor-agents': fromRoot('webview/bootstrap/agentsStub.ts'),
-		'@eigenpal/docx-editor-agents/react': fromRoot('webview/bootstrap/agentsStub.ts'),
 		// Vendored (unpublished) vsdx packages resolve by their upstream names inside the sources.
 		'@betteroffice/vsdx': fromRoot('vendor/betteroffice/vsdx/src/index.ts'),
 		'@betteroffice/vsdx-i18n': fromRoot('vendor/betteroffice/vsdx-i18n/src/index.ts'),
@@ -389,23 +395,40 @@ async function writeManifest(copiedAssets, metafiles, { check = true } = {}) {
 
 
 /**
- * Offline + no-collaboration guard (product guarantees): shipped webview bundles must never
- * contain a realtime transport (collaboration is transport-injected by design and none is wired —
- * the vendored vsdx editor bundles its collaboration *code* inertly, without any transport) or
- * beacon machinery, or the agents package. `fonts.googleapis` in the docx bundle is the eigenpal
- * loader string that `setGoogleFontsEnabled(false)` disables at module scope — CSP `connect-src`
- * blocks it regardless.
+ * Offline + no-collaboration guard (plan §2.3 layer 2): shipped webview bundles must never
+ * contain a realtime transport, a beacon/stream, a Google Fonts CDN origin, a leaked peer
+ * dependency (`yjs` / `pdf-lib`, which would pull collaboration/PDF-export code into the bundle),
+ * or the removed agents package. `harfbuzz.wasm` must be present in the asset manifest.
  */
 async function verifyNoEgressNoCollaboration() {
 	const problems = [];
+	const forbidden = ['new WebSocket', 'sendBeacon', 'EventSource', 'googleapis', 'gstatic', 'docx-editor-agents'];
 	for (const entry of webviewEntries) {
 		const file = fromRoot('out/media', `${entry.out}.js`);
 		if (!existsSync(file)) continue;
 		const code = await readFile(file, 'utf8');
-		for (const marker of ['new WebSocket', 'sendBeacon', 'EventSource', 'docx-editor-agents']) {
+		for (const marker of forbidden) {
 			if (code.includes(marker)) problems.push(`${path.basename(file)} contains "${marker}"`);
 		}
+		// A resolved (bundled or still-external) peer dependency means the engine graph leaked
+		// collaboration / PDF-export code into a shipped webview bundle.
+		for (const peer of ['yjs', 'pdf-lib']) {
+			for (const pattern of [`from"${peer}`, `from'${peer}`, `require("${peer}")`, `import("${peer}")`]) {
+				if (code.includes(pattern)) problems.push(`${path.basename(file)} resolves peer dependency "${peer}"`);
+			}
+		}
 	}
+
+	// Positive check: the docx HarfBuzz shaper must be addressable through the manifest
+	// (`__extAssetUrl('harfbuzz.wasm')`).
+	const manifestFile = fromRoot('out/media/manifest.json');
+	if (existsSync(manifestFile)) {
+		const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+		if (!manifest.assets || !('harfbuzz.wasm' in manifest.assets)) {
+			problems.push('out/media/manifest.json is missing the "harfbuzz.wasm" entry');
+		}
+	}
+
 	if (problems.length > 0) {
 		throw new Error(`offline/no-collaboration verification failed:\n  ${problems.join('\n  ')}`);
 	}

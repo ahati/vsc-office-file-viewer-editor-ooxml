@@ -42,36 +42,60 @@ const STATE_POLL_MS = 1_000;
 const RESTORE_MAX_ATTEMPTS = 60;
 
 let reactRoot: ReturnType<typeof createRoot> | undefined;
+/** The container style element that forces the light chrome, when `colorMode === 'light'`. */
+let lightSchemeStyle: HTMLStyleElement | undefined;
 
-function ensureReactRoot(): ReturnType<typeof createRoot> {
+function ensureReactRoot(colorMode: 'light' | 'dark' | 'system'): ReturnType<typeof createRoot> {
 	const host = resolveHost();
 	if (!host) throw new Error('webview host element (#viewer-root) is missing');
 	if (!reactRoot) {
 		// Keep the host's #status overlay in place: mount into a dedicated child.
 		const container = host.querySelector<HTMLElement>('#office-docx-mount') ?? host.appendChild(document.createElement('div'));
 		container.id = 'office-docx-mount';
-		container.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;min-height:0;color-scheme:light';
-		// The document page is forced light; keep native scrollbars/form controls light as well.
-		const scheme = host.ownerDocument.createElement('style');
-		const scope = '#office-docx-mount';
-		scheme.textContent = [
-			`${scope}, ${scope} * { color-scheme: light; }`,
-			`${scope} { scrollbar-color: #c4ccd6 #f3f5f8; }`,
-			`${scope} ::-webkit-scrollbar { width: 12px; height: 12px; background: #f5f6f8; }`,
-			`${scope} ::-webkit-scrollbar-thumb { background: #c4ccd6; border-radius: 6px; border: 3px solid #f5f6f8; }`,
-			`${scope} ::-webkit-scrollbar-thumb:hover { background: #aab3c0; }`,
-			`${scope} ::-webkit-scrollbar-corner { background: #f5f6f8; }`,
-		].join('\n');
-		host.ownerDocument.head.appendChild(scheme);
+		container.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;min-height:0';
 		reactRoot = createRoot(container);
 	}
+	applyLightChromeScheme(host.ownerDocument, colorMode);
 	return reactRoot;
+}
+
+/**
+ * `officeFileViewer.colorMode` (plan §6): the 2.x engine themes the **chrome** only — the page
+ * canvas stays Word-faithful white in every mode.
+ *
+ * - `light` (default): keep forcing `color-scheme: light` plus light native scrollbars, exactly
+ *   as before the setting existed.
+ * - `dark` / `system`: drop those overrides so the chrome (and its radix popups/scrollbars)
+ *   follows the setting/OS theme instead of fighting it.
+ */
+function applyLightChromeScheme(doc: Document, colorMode: 'light' | 'dark' | 'system'): void {
+	const scope = '#office-docx-mount';
+	const container = doc.querySelector<HTMLElement>(scope);
+	if (colorMode !== 'light') {
+		lightSchemeStyle?.remove();
+		lightSchemeStyle = undefined;
+		if (container) container.style.colorScheme = 'normal';
+		return;
+	}
+	if (container) container.style.colorScheme = 'light';
+	if (lightSchemeStyle) return;
+	const scheme = doc.createElement('style');
+	scheme.textContent = [
+		`${scope}, ${scope} * { color-scheme: light; }`,
+		`${scope} { scrollbar-color: #c4ccd6 #f3f5f8; }`,
+		`${scope} ::-webkit-scrollbar { width: 12px; height: 12px; background: #f5f6f8; }`,
+		`${scope} ::-webkit-scrollbar-thumb { background: #c4ccd6; border-radius: 6px; border: 3px solid #f5f6f8; }`,
+		`${scope} ::-webkit-scrollbar-thumb:hover { background: #aab3c0; }`,
+		`${scope} ::-webkit-scrollbar-corner { background: #f5f6f8; }`,
+	].join('\n');
+	doc.head.appendChild(scheme);
+	lightSchemeStyle = scheme;
 }
 
 /** Mounts (or re-renders) the docx editor for one `init` payload. */
 export async function mountDocx(init: ViewerInit, context: ViewerContext): Promise<void> {
 	const { DocxEditor } = await import('@docx-editor.dev/react');
-	ensureReactRoot().render(
+	ensureReactRoot(init.config.colorMode).render(
 		<DocxViewer DocxEditor={DocxEditor} init={init} context={context} fonts={await loadDocxFontDefinitions(init.config)} />,
 	);
 }
@@ -179,10 +203,10 @@ function DocxViewer({ DocxEditor, init, context, fonts }: DocxViewerProps): JSX.
 			document={init.bytes}
 			title={init.fileName}
 			mode={readOnly ? 'view' : 'edit'}
-			// Word documents are white-paper artifacts; keep the editing surface light even in dark
-			// VS Code themes (the surrounding chrome still follows the editor theme).
-			// TODO(integrate): wire init.config.colorMode once the setting exists end-to-end.
-			colorMode="light"
+			// 2.x themes the chrome only; the canvas stays Word-faithful white. Follows
+			// `officeFileViewer.colorMode` (default 'light'; see applyLightChromeScheme for the
+			// container/scrollbar overrides that stay light-only).
+			colorMode={init.config.colorMode}
 			rulers={!readOnly}
 			// chrome + navigation keep their 2.x defaults (both true) — same frame + outline
 			// visibility as the 1.x `showToolbar`/`showOutline` pair.

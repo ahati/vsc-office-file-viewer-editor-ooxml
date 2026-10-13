@@ -10,6 +10,7 @@ export interface ViewerWebviewConfig {
 	fonts: 'bundled' | 'off';
 	cjkFonts: 'off' | 'cdn';
 	initialZoom: 'fitPage' | 'fitWidth' | '100';
+	colorMode: 'light' | 'dark' | 'system';
 }
 
 /** Reads `officeFileViewer.*` once per editor resolution. */
@@ -25,5 +26,6 @@ export function getViewerWebviewConfig(): ViewerWebviewConfig {
 		fonts: pick('fonts', ['bundled', 'off'] as const, 'bundled'),
 		cjkFonts: pick('cjkFonts', ['off', 'cdn'] as const, 'off'),
 		initialZoom: pick('initialZoom', ['fitPage', 'fitWidth', '100'] as const, 'fitPage'),
+		colorMode: pick('colorMode', ['light', 'dark', 'system'] as const, 'light'),
 	};
 }
