@@ -23,6 +23,21 @@ import { errorText } from './util';
 /** Family name the diagram asks for; the bundled face stands in for it metric-compatibly. */
 export const DEFAULT_FONT_FAMILY = 'Arial';
 
+/**
+ * Additional families registered so diagram text matches its authored family metric-compatibly
+ * (the engine picks the face registered for a run's family). Only families
+ * `resolveMetricCompatFace` maps are registered — Visio decks commonly use Calibri/Arial.
+ */
+const VSDX_FAMILIES = [
+	'Arial',
+	'Calibri',
+	'Cambria',
+	'Times New Roman',
+	'Courier New',
+	'Georgia',
+	'Segoe UI',
+] as const;
+
 const STYLE_VARIANTS: ReadonlyArray<{ bold: boolean; italic: boolean }> = [
 	{ bold: false, italic: false },
 	{ bold: true, italic: false },
@@ -55,19 +70,18 @@ export async function loadVsdxFonts(config: ViewerWebviewConfig): Promise<VsdxFo
 	}
 
 	const fonts: VsdxFontFace[] = [];
-	for (const variant of STYLE_VARIANTS) {
-		const bytes = await tryLoad(
-			() => {
-				const face =
-					resolveMetricCompatFace(DEFAULT_FONT_FAMILY, variant.bold, variant.italic) ??
-					resolveLastResortFace(DEFAULT_FONT_FAMILY, variant.bold, variant.italic);
-				return loadBundledFontBytes(face);
-			},
-			warnings,
-			`${variant.bold ? 'bold' : 'regular'}${variant.italic ? ' italic' : ''} ${DEFAULT_FONT_FAMILY} face`,
-		);
-		if (bytes) {
-			fonts.push({ family: DEFAULT_FONT_FAMILY, bold: variant.bold, italic: variant.italic, bytes });
+	for (const family of VSDX_FAMILIES) {
+		for (const variant of STYLE_VARIANTS) {
+			const face = resolveMetricCompatFace(family, variant.bold, variant.italic);
+			if (!face && family !== DEFAULT_FONT_FAMILY) continue; // no bundled face for this family
+			const bytes = await tryLoad(
+				() => loadBundledFontBytes(face ?? resolveLastResortFace(DEFAULT_FONT_FAMILY, variant.bold, variant.italic)),
+				warnings,
+				`${variant.bold ? 'bold' : 'regular'}${variant.italic ? ' italic' : ''} ${family} face`,
+			);
+			if (bytes) {
+				fonts.push({ family, bold: variant.bold, italic: variant.italic, bytes });
+			}
 		}
 	}
 	if (fonts.length === 0) {

@@ -30,12 +30,12 @@
     "viewer",
     "wasm"
   ],
-  "activationEvents": [],
   "contributes": {
     "customEditors": [
       {
         "viewType": "officeFileViewer.docx",
         "displayName": "Office File Viewer (Word)",
+        "priority": "default",
         "selector": [
           {
             "filenamePattern": "*.docx"
@@ -43,12 +43,12 @@
           {
             "filenamePattern": "*.docm"
           }
-        ],
-        "priority": "default"
+        ]
       },
       {
         "viewType": "officeFileViewer.xlsx",
         "displayName": "Office File Viewer (Excel)",
+        "priority": "default",
         "selector": [
           {
             "filenamePattern": "*.xlsx"
@@ -56,12 +56,12 @@
           {
             "filenamePattern": "*.xlsm"
           }
-        ],
-        "priority": "default"
+        ]
       },
       {
         "viewType": "officeFileViewer.pptx",
         "displayName": "Office File Viewer (PowerPoint)",
+        "priority": "default",
         "selector": [
           {
             "filenamePattern": "*.pptx"
@@ -69,18 +69,17 @@
           {
             "filenamePattern": "*.pptm"
           }
-        ],
-        "priority": "default"
+        ]
       },
       {
         "viewType": "officeFileViewer.vsdx",
         "displayName": "Office File Viewer (Visio)",
+        "priority": "default",
         "selector": [
           {
             "filenamePattern": "*.vsdx"
           }
-        ],
-        "priority": "default"
+        ]
       }
     ],
     "commands": [
@@ -139,7 +138,52 @@
           "description": "Always open documents read-only, regardless of the editing setting."
         }
       }
-    }
+    },
+    "languages": [
+      {
+        "id": "office-file-pptx",
+        "extensions": [
+          ".pptx",
+          ".pptm"
+        ],
+        "icon": {
+          "light": "./media/file-pptx.svg",
+          "dark": "./media/file-pptx.svg"
+        }
+      },
+      {
+        "id": "office-file-vsdx",
+        "extensions": [
+          ".vsdx"
+        ],
+        "icon": {
+          "light": "./media/file-vsdx.svg",
+          "dark": "./media/file-vsdx.svg"
+        }
+      },
+      {
+        "id": "office-file-docx",
+        "extensions": [
+          ".docx",
+          ".docm"
+        ],
+        "icon": {
+          "light": "./media/file-docx.svg",
+          "dark": "./media/file-docx.svg"
+        }
+      },
+      {
+        "id": "office-file-xlsx",
+        "extensions": [
+          ".xlsx",
+          ".xlsm"
+        ],
+        "icon": {
+          "light": "./media/file-xlsx.svg",
+          "dark": "./media/file-xlsx.svg"
+        }
+      }
+    ]
   },
   "scripts": {
     "compile": "node scripts/build.mjs",

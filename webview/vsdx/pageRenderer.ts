@@ -28,6 +28,15 @@ export const MIN_ZOOM_SCALE = 0.02;
 export const MAX_ZOOM_SCALE = 4;
 /** Display lists are large; keep a few around for fast page flips, not the whole document. */
 const MAX_CACHED_LAYOUTS = 4;
+/**
+ * Progressive first paint: the awaited fast pass never blocks on uncached media (measured:
+ * `mediaBytes` extraction can cost ~800 ms per asset, which used to freeze the first frame for
+ * seconds) and large surfaces rasterize at half DPR (~4× fewer pixels). A refinement pass on
+ * idle repaints at full DPR *with* images once their decode settles.
+ */
+const FAST_PASS_PIXEL_LIMIT = 2_500_000;
+const FAST_PASS_DPR_FACTOR = 0.5;
+const REFINE_IDLE_TIMEOUT_MS = 300;
 
 export interface PageRendererCallbacks {
 	/** Fired around an actual `paintPage` call so the shell can show its spinner. */
@@ -52,6 +61,7 @@ export class PageRenderer {
 	private context: CanvasRenderingContext2D | null = null;
 	private paintAbort: AbortController | undefined;
 	private renderToken = 0;
+	private refineHandle: number | undefined;
 	private pageIndexValue = 0;
 	private scaleValue = 1;
 	private pixelRatioValue = 1;
@@ -140,28 +150,84 @@ export class PageRenderer {
 		return clamped;
 	}
 
-	/** Lays out (if needed) and paints the active page; rejects on layout/paint failure. */
+	/**
+	 * Lays out (if needed) and paints the active page; rejects on layout/paint failure.
+	 *
+	 * Large surfaces paint progressively: the awaited first pass rasterizes at half DPR so content
+	 * appears quickly, and the full-quality frame is refined on idle (same token guards as the
+	 * main paint — zooming, page switches and dispose cancel it).
+	 */
 	async render(): Promise<void> {
 		if (this.disposed) return;
 		const token = ++this.renderToken;
+		this.cancelRefinement();
 		this.paintAbort?.abort();
 		const abort = new AbortController();
 		this.paintAbort = abort;
 		const list = this.layout();
 		const canvas = this.ensureCanvas();
-		this.pixelRatioValue = sizeCanvasForPage(canvas, surfaceSize(list), currentDevicePixelRatio(), this.scaleValue);
+		const targetDpr = sizeCanvasForPage(canvas, surfaceSize(list), currentDevicePixelRatio(), this.scaleValue);
+		this.pixelRatioValue = targetDpr;
 		const context = this.context ?? canvas.getContext('2d');
 		if (!context) throw new Error('failed to acquire a 2D canvas context');
 		this.context = context;
 		this.callbacks.onBusyChange?.(true);
 		try {
-			await paintPage(context, list, this.pixelRatioValue, this.scaleValue, {
+			const targetPixels = canvas.width * canvas.height;
+			const largeSurface = targetPixels > FAST_PASS_PIXEL_LIMIT;
+			const uncachedImages = this.uncachedImageIds(list);
+			const paintOptions = (blockingImages: boolean) => ({
 				signal: abort.signal,
-				resolveImage: (assetId) => this.resolveImage(assetId),
-			});
+				resolveImage: blockingImages
+					? (assetId: string) => this.blockingResolveImage(assetId)
+					: (assetId: string) => this.fastResolveImage(assetId),
+				});
+			if (largeSurface) {
+				// Fast pass at half DPR: ~4× fewer pixels, CSS box unchanged (zoom math unaffected).
+				const fastDpr = sizeCanvasForPage(canvas, surfaceSize(list), targetDpr * FAST_PASS_DPR_FACTOR, this.scaleValue);
+				this.pixelRatioValue = fastDpr;
+				await paintPage(context, list, fastDpr, this.scaleValue, paintOptions(false));
+				if (token !== this.renderToken) return;
+			} else {
+				await paintPage(context, list, targetDpr, this.scaleValue, paintOptions(false));
+				if (token !== this.renderToken) return;
+			}
+			if (largeSurface || uncachedImages.length > 0) {
+				this.scheduleRefinement(token, list, targetDpr);
+			}
 		} finally {
 			if (token === this.renderToken) this.callbacks.onBusyChange?.(false);
 		}
+	}
+
+	/** Repaints the same page/scale at full DPR with images once the browser is idle (no spinner). */
+	private scheduleRefinement(token: number, list: PageDisplayList, targetDpr: number): void {
+		const idle = (callback: () => void): number =>
+			typeof requestIdleCallback === 'function'
+				? requestIdleCallback(callback, { timeout: REFINE_IDLE_TIMEOUT_MS })
+				: (setTimeout(callback, REFINE_IDLE_TIMEOUT_MS) as unknown as number);
+		this.refineHandle = idle(() => {
+			this.refineHandle = undefined;
+			if (this.disposed || token !== this.renderToken) return;
+			const canvas = this.canvas;
+			const context = this.context;
+			if (!canvas || !context) return;
+			sizeCanvasForPage(canvas, surfaceSize(list), targetDpr, this.scaleValue);
+			this.pixelRatioValue = targetDpr;
+			void paintPage(context, list, targetDpr, this.scaleValue, {
+				resolveImage: (assetId) => this.blockingResolveImage(assetId),
+				// No abort signal: nothing can invalidate this frame except a new render (token).
+			}).catch(() => {
+				/* the fast pass is already on screen; a failed refinement is non-fatal */
+			});
+		});
+	}
+
+	private cancelRefinement(): void {
+		if (this.refineHandle === undefined) return;
+		if (typeof cancelIdleCallback === 'function') cancelIdleCallback(this.refineHandle);
+		else clearTimeout(this.refineHandle);
+		this.refineHandle = undefined;
 	}
 
 	/**
@@ -177,6 +243,7 @@ export class PageRenderer {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.renderToken += 1;
+		this.cancelRefinement();
 		this.paintAbort?.abort();
 		this.paintAbort = undefined;
 		for (const image of this.images.values()) closeImage(image);
@@ -209,9 +276,34 @@ export class PageRenderer {
 		}
 	}
 
-	private resolveImage(assetId: string): CanvasImageSource | null | Promise<CanvasImageSource | null> {
+	/** Image ids of the page whose decoded bitmap is not cached yet (deduped, order-stable). */
+	private uncachedImageIds(list: PageDisplayList): string[] {
+		const ids = new Set<string>();
+		for (const primitive of list.primitives) {
+			if (primitive.kind === 'image' && primitive.assetId && !this.images.has(primitive.assetId)) {
+				ids.add(primitive.assetId);
+			}
+		}
+		return [...ids];
+	}
+
+	/** Fast-pass resolver: never blocks the paint; uncached images start decoding in the background. */
+	private fastResolveImage(assetId: string): CanvasImageSource | null {
 		const cached = this.images.get(assetId);
 		if (cached !== undefined) return cached;
+		void this.kickDecode(assetId);
+		return null; // painted as absent this frame; the refinement pass draws it
+	}
+
+	/** Refinement resolver: waits for decode (kicking it off when needed). */
+	private blockingResolveImage(assetId: string): CanvasImageSource | null | Promise<CanvasImageSource | null> {
+		const cached = this.images.get(assetId);
+		if (cached !== undefined) return cached;
+		return this.kickDecode(assetId);
+	}
+
+	/** Starts (or joins) the background decode for `assetId`; deduped via `pendingImages`. */
+	private kickDecode(assetId: string): Promise<CanvasImageSource | null> {
 		let pending = this.pendingImages.get(assetId);
 		if (!pending) {
 			pending = this.decodeImage(assetId);
@@ -223,6 +315,11 @@ export class PageRenderer {
 
 	private async decodeImage(assetId: string): Promise<CanvasImageSource | null> {
 		try {
+			// Yield before the wasm-side extraction: `mediaBytes` can block for hundreds of
+			// milliseconds per asset, and interleaving keeps the tab responsive while the
+			// refinement pass works through the image set.
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			if (this.disposed) return null;
 			const bytes = this.handle.mediaBytes(assetId);
 			const mime = sniffImageMime(bytes);
 			if (!mime) {

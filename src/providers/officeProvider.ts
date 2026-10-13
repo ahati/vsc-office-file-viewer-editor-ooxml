@@ -110,7 +110,10 @@ export class OfficeProvider implements vscode.CustomReadonlyEditorProvider<Offic
 		_openContext: vscode.CustomDocumentOpenContext,
 		_token: vscode.CancellationToken,
 	): Promise<OfficeDocument> {
-		const data = await vscode.workspace.fs.readFile(uri);
+		const data = await Promise.resolve(vscode.workspace.fs.readFile(uri)).catch((error: unknown) => {
+			// Surface a message that names the file inside VS Code's editor error dialog.
+			throw new Error(`Office File Viewer could not read ${uri.fsPath}: ${String(error)}`);
+		});
 		return new OfficeDocument(uri, this.format, data);
 	}
 
