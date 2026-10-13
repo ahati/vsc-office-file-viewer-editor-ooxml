@@ -1,44 +1,45 @@
 /**
- * docx adapter: mounts the eigenpal `DocxEditor` (`@eigenpal/docx-editor-react`).
+ * docx adapter: mounts the `@docx-editor.dev/react` `DocxEditor` (2.29.0).
  *
- * Why eigenpal (product decision, 2026-10): DOM + ProseMirror paginated word processor with
- * lossless selective-rezip save (unsupported OOXML and embedded parts survive round-trips),
- * editable by default, Apache-2.0, and a much smaller attack surface than a WASM engine
- * (no wasm, no workers, no eval, zero `fetch(` in dist).
+ * OFFLINE CONTRACT (critical): unlike 1.x there is no Google Fonts lookup to disable — the CDN
+ * origin is an opt-in package (`@docx-editor.dev/fonts/google`) we do not install, and every
+ * font we hand to the engine is byte-backed (see webview/fonts.ts), so there is no URL for the
+ * engine to fetch on demand. HarfBuzz shaping loads `harfbuzz.wasm` as a same-origin extension
+ * asset from the build's asset manifest; the engine dists contain no workers, no dynamic
+ * imports and no telemetry (docs/MIGRATION-DOCX-EDITOR-2X.md §2). Readers are: (1) no egress by
+ * construction — bytes-only sources, no modules, no resolver that fetches; (2) the webview CSP
+ * (`script-src 'wasm-unsafe-eval'`, `connect-src <ext-origin> data: blob:`);
+ * (3) the build's no-egress/no-collaboration bundle postcheck.
  *
- * OFFLINE CONTRACT (critical): the engine ships a Google Fonts CDN lookup that is ON by default.
- * `setGoogleFontsEnabled(false)` below runs at MODULE EVALUATION time — before any document can
- * parse — and permanently severs `fonts.googleapis.com` for this page. Font fidelity instead
- * comes from our bundled metric-compatible faces handed to the `fonts` prop (see webview/fonts.ts).
- *
- * Prop names verified against `node_modules/@eigenpal/docx-editor-react/dist/index.d.ts`:
- *   documentBuffer?: DocxInput (ArrayBuffer | Uint8Array | Blob | File)   documentName?: string
- *   readOnly?: boolean (hides toolbar + rulers)   mode?: 'editing'|'suggesting'|'viewing'
- *   colorMode?: 'light'|'dark'|'system'           showToolbar/showFileOpen/showHelpMenu?: boolean
- *   showZoomControl?: boolean  showRuler?: boolean  showOutline?: boolean
- *   fonts?: ReadonlyArray<FontDefinition>         onSave?: (buffer: ArrayBuffer) => void
- *   onChange?: (document: Document) => void       onError?: (error: Error) => void
- *   initialZoom?: number                          ref: DocxEditorRef (save/getZoom/getCurrentPage/…)
+ * Prop mapping verified against `node_modules/@docx-editor.dev/react/dist/index.d.ts` (2.29.0):
+ *   document?: DocumentSource (ArrayBuffer | Uint8Array | DocumentHandle | 'blank')
+ *   title?: string                         mode?: 'edit' | 'view' | 'suggesting'
+ *   colorMode?: 'light' | 'dark' | 'system' (chrome only; the canvas stays Word-faithful)
+ *   chrome?: boolean (default true)        navigation?: boolean (default true — outline parity)
+ *   rulers?: boolean                       menu?: boolean | DocxEditorMenuProps
+ *   fonts?: FontConfiguration | FontConfigurationFragment | FontResolver
+ *   zoom?: number   zoomMode?: ZoomMode | 'auto'
+ *   onSave?: () => void                    onFontError?: (error: EditorFontError) => void
+ *   ref: load/save/getDocumentHandle/getEditor/focus/exec/snapshot — zoom and paging live on
+ *   the `Editor` facade reached through `getEditor()`.
  */
-import { setGoogleFontsEnabled } from '@eigenpal/docx-editor-core';
-import '@eigenpal/docx-editor-react/styles.css';
+import '@docx-editor.dev/react/styles.css';
+import type { ZoomMode } from '@docx-editor.dev/core/contracts/editor';
 import { useEffect, useRef } from 'react';
 import type { JSX } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { DocxEditorRef } from '@eigenpal/docx-editor-react';
+import type { DocxEditorRef } from '@docx-editor.dev/react';
 import type { ViewerContext, ViewerInit } from '../bootstrap/entryRuntime';
 import { resolveHost } from '../chrome/errorPanel';
 import { loadDocxFontDefinitions } from '../fonts';
 
-// Offline kill switch — MUST run before any editor mounts or document parses. The engine's
-// Google Fonts lookup is page-global and defaults to enabled; this is the only network egress
-// the docx engine can ever perform (see webview/fonts.ts for the offline font substitute).
-setGoogleFontsEnabled(false);
-
-type DocxEditorComponent = typeof import('@eigenpal/docx-editor-react')['DocxEditor'];
+type DocxEditorComponent = typeof import('@docx-editor.dev/react')['DocxEditor'];
 
 /** State polling interval for `state { zoom, page }` (the debounce in the entry runtime is 500 ms). */
 const STATE_POLL_MS = 1_000;
+
+/** How many 500 ms ticks the zoom/page restore waits for the first layout before giving up. */
+const RESTORE_MAX_ATTEMPTS = 60;
 
 let reactRoot: ReturnType<typeof createRoot> | undefined;
 
@@ -69,7 +70,7 @@ function ensureReactRoot(): ReturnType<typeof createRoot> {
 
 /** Mounts (or re-renders) the docx editor for one `init` payload. */
 export async function mountDocx(init: ViewerInit, context: ViewerContext): Promise<void> {
-	const { DocxEditor } = await import('@eigenpal/docx-editor-react');
+	const { DocxEditor } = await import('@docx-editor.dev/react');
 	ensureReactRoot().render(
 		<DocxViewer DocxEditor={DocxEditor} init={init} context={context} fonts={await loadDocxFontDefinitions(init.config)} />,
 	);
@@ -82,20 +83,48 @@ interface DocxViewerProps {
 	fonts: Awaited<ReturnType<typeof loadDocxFontDefinitions>>;
 }
 
+/** The `zoom`/`zoomMode` pair 2.x takes, derived from `ViewerWebviewConfig.initialZoom`. */
+interface DocxZoomProps {
+	zoom?: number;
+	zoomMode: ZoomMode | 'auto';
+}
+
+/**
+ * `initialZoom` → 2.x zoom props.
+ *
+ * 2.29.0's `ZoomFitTarget` has a single member, `'pageWidth'` (the page-height fit is not part
+ * of this line), so `fitPage` uses the same width fit as `fitWidth`; `'auto'` is the engine's
+ * bounded 50–100% width fit. A saved zoom still wins at restore time (`Editor.setZoom` leaves
+ * the fit mode). `ZoomMode` literals verified in
+ * `node_modules/@docx-editor.dev/core/dist/editor-CZQZmTIU.d.ts`.
+ */
+function resolveZoom(initialZoom: ViewerInit['config']['initialZoom']): DocxZoomProps {
+	switch (initialZoom) {
+		case 'fitPage':
+		case 'fitWidth':
+			return { zoomMode: { type: 'fit', fit: 'pageWidth' } };
+		case '100':
+			return { zoom: 1, zoomMode: { type: 'fixed' } };
+	}
+}
+
 function DocxViewer({ DocxEditor, init, context, fonts }: DocxViewerProps): JSX.Element {
 	const ref = useRef<DocxEditorRef | null>(null);
 	const readOnly = !init.config.editing || init.config.forceReadOnly;
+	const { zoom, zoomMode } = resolveZoom(init.config.initialZoom);
 
-	// `state { zoom, page }`: best effort, polled — the ref exposes getters only.
+	// `state { zoom, page }`: best effort, polled. The ref only exposes `getEditor()`; the
+	// facade behind it owns zoom and paging and is `null` until the editor has mounted.
 	useEffect(() => {
 		const timer = setInterval(() => {
-			const editor = ref.current;
-			if (!editor) return;
 			try {
+				const editor = ref.current?.getEditor();
+				if (!editor) return;
 				context.reportState({
 					zoom: editor.getZoom(),
 					page: editor.getCurrentPage(),
-					pageCount: editor.getTotalPages(),
+					// `getPageGeometry()` is empty until the first layout, the honest answer.
+					pageCount: editor.getPageGeometry().length,
 				});
 			} catch {
 				/* editor is mid-teardown */
@@ -104,19 +133,39 @@ function DocxViewer({ DocxEditor, init, context, fonts }: DocxViewerProps): JSX.
 		return () => clearInterval(timer);
 	}, [context]);
 
-	// Restore the previous zoom/page once the document has laid out (best effort: the eigenpal
-	// ref has no layout-complete promise, so retry until the page count is non-zero).
+	// 2.x has no `onError`: a failed open lands in the snapshot's `parseError` (a
+	// `document.open` diagnostic only reaches a module registered at construction, and the
+	// document we pass at construction opens before `onReady` can subscribe). Poll the
+	// snapshot and surface the first failure through the host error panel; dedupe so one
+	// failure is reported once even if it stays set.
 	useEffect(() => {
-		const editor = ref.current;
-		if (!editor) return;
+		let reported: string | null = null;
+		const timer = setInterval(() => {
+			try {
+				const parseError = ref.current?.snapshot().parseError ?? null;
+				if (!parseError || parseError === reported) return;
+				reported = parseError;
+				context.fail('render', new Error(parseError));
+			} catch {
+				/* editor is mid-teardown */
+			}
+		}, STATE_POLL_MS);
+		return () => clearInterval(timer);
+	}, [context]);
+
+	// Restore the previous zoom/page once the document has laid out. The layout-ready signal is
+	// `getPageGeometry().length > 0` (the engine has no layout-complete promise); retry until it
+	// is non-empty, then prefer the saved zoom over the configured one.
+	useEffect(() => {
 		if (!context.hasSavedZoom() && context.getSavedPage(1) === 1) return;
 		let attempts = 0;
 		const timer = setInterval(() => {
 			attempts += 1;
-			const ready = editor.getTotalPages() > 0;
-			if (!ready && attempts < 60) return;
+			const editor = ref.current?.getEditor();
+			const ready = (editor?.getPageGeometry().length ?? 0) > 0;
+			if (!ready && attempts < RESTORE_MAX_ATTEMPTS) return;
 			clearInterval(timer);
-			if (!ready) return;
+			if (!editor || !ready) return;
 			if (context.hasSavedZoom()) editor.setZoom(context.getInitialZoom(1));
 			const page = context.getSavedPage(1);
 			if (page > 1) editor.scrollToPage(page);
@@ -127,21 +176,40 @@ function DocxViewer({ DocxEditor, init, context, fonts }: DocxViewerProps): JSX.
 	return (
 		<DocxEditor
 			ref={ref}
-			documentBuffer={init.bytes}
-			documentName={init.fileName}
-			readOnly={readOnly}
-			mode={readOnly ? 'viewing' : 'editing'}
+			document={init.bytes}
+			title={init.fileName}
+			mode={readOnly ? 'view' : 'edit'}
 			// Word documents are white-paper artifacts; keep the editing surface light even in dark
 			// VS Code themes (the surrounding chrome still follows the editor theme).
+			// TODO(integrate): wire init.config.colorMode once the setting exists end-to-end.
 			colorMode="light"
-			showZoomControl
-			showRuler={!readOnly}
-			showOutline
-			showFileOpen={false}
-			showHelpMenu={false}
+			rulers={!readOnly}
+			// chrome + navigation keep their 2.x defaults (both true) — same frame + outline
+			// visibility as the 1.x `showToolbar`/`showOutline` pair.
+			menu={{
+				// An offline product must not offer the upstream issue tracker (plan §2, M3).
+				reportIssue: false,
+				// VS Code owns opening files; drop the packaged File › Open row (the one
+				// remaining way to reach the menu's own file picker).
+				children: (
+					<DocxEditor.Menu.File>
+						<DocxEditor.Menu.Open hidden />
+					</DocxEditor.Menu.File>
+				),
+			}}
+			zoom={zoom}
+			zoomMode={zoomMode}
 			fonts={fonts}
-			onSave={(buffer) => context.saveBytes(buffer)}
-			onError={(error) => context.fail('render', error)}
+			onSave={() => {
+				void ref.current?.save().then((buffer) => {
+					if (buffer) context.saveBytes(buffer);
+				});
+			}}
+			// Font failures are non-fatal: the engine falls back to a fixed-width measurer, so
+			// layout degrades but the document still opens. Report and keep going.
+			onFontError={(error) => {
+				console.warn(`[office-file-viewer] docx font ${error.code}: ${error.message}`);
+			}}
 		/>
 	);
 }
