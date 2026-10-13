@@ -49,7 +49,11 @@ function ensureReactRoot(): ReturnType<typeof createRoot> {
 		// Keep the host's #status overlay in place: mount into a dedicated child.
 		const container = host.querySelector<HTMLElement>('#office-docx-mount') ?? host.appendChild(document.createElement('div'));
 		container.id = 'office-docx-mount';
-		container.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;min-height:0';
+		container.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;min-height:0;color-scheme:light';
+		// The document page is forced light; keep native scrollbars/form controls light as well.
+		const scheme = host.ownerDocument.createElement('style');
+		scheme.textContent = '#office-docx-mount, #office-docx-mount * { color-scheme: light; }';
+		host.ownerDocument.head.appendChild(scheme);
 		reactRoot = createRoot(container);
 	}
 	return reactRoot;

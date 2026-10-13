@@ -34,7 +34,12 @@ function ensureReactRoot(): ReturnType<typeof createRoot> {
 		const container = host.querySelector<HTMLElement>('#office-vsdx-mount') ?? host.appendChild(document.createElement('div'));
 		container.id = 'office-vsdx-mount';
 		// The editor is light-styled by design; give it an opaque light surface.
-		container.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;min-height:0;background:#ffffff;color:#1b1b1b';
+		container.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;min-height:0;background:#ffffff;color:#1b1b1b;color-scheme:light';
+		// Light scrollbars/form controls too: the editor chrome is light-styled, so the whole
+		// subtree opts out of the dark `color-scheme` VS Code applies to webviews.
+		const scheme = host.ownerDocument.createElement('style');
+		scheme.textContent = '#office-vsdx-mount, #office-vsdx-mount * { color-scheme: light; }';
+		host.ownerDocument.head.appendChild(scheme);
 		reactRoot = createRoot(container);
 	}
 	return reactRoot;
