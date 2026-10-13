@@ -1,19 +1,21 @@
 /**
- * Per-format font wiring (DESIGN §8, SCOPING §6).
+ * Per-format font wiring (DESIGN §8, SCOPING §6; MIGRATION-DOCX-EDITOR-2X §4).
  *
- * - docx (@eigenpal/docx-editor): takes `FontDefinition[]` — family + src URL + weight — and
- *   injects `@font-face` rules itself. We point `src` at our bundled metric-compatible TTFs via
- *   `__extAssetUrl` so Office-accurate layout stays fully offline. The engine's built-in Google
- *   Fonts lookup MUST be disabled before mount (`setGoogleFontsEnabled(false)`, module scope in
- *   the docx mount) — that is the only network path in the entire product.
+ * - docx (@docx-editor.dev/* 2.29.0): the editor takes BYTES — a `FontConfigurationFragment`
+ *   (`{ supportedFamilies, sources }`) whose sources are built with `createFontSource`. We resolve
+ *   our bundled metric-compatible faces (`@betteroffice/fonts`) to the Office family names Word
+ *   documents reference and load their TTFs through the bundle's asset lookups (`__extAssetUrl`,
+ *   i.e. `out/media/assets/`, extension origin), so Office-accurate layout stays fully offline.
+ *   2.x has no Google Fonts path at all (that origin lives in the separate, uninstalled
+ *   `@docx-editor.dev/fonts/google`), and a face that cannot be produced degrades only itself.
  * - pptx (@betteroffice/pptx): takes `PptxFontFace[]` (family + bytes) — registered under their
  *   real family names so the engine matches deck runs.
  * - xlsx: no font API at all (SCOPING R8).
  */
 import { loadBundledFontBytes, resolveLastResortFace, resolveMetricCompatFace } from '@betteroffice/fonts';
-import type { FontDefinition } from '@eigenpal/docx-editor-core/utils';
+import { createFontSource, type FontConfigurationFragment } from '@docx-editor.dev/core/editor';
+import type { FontFaceRequest, FontSource } from '@docx-editor.dev/core/contracts/editor';
 import type { PptxFontFace } from '@betteroffice/pptx';
-import { getAssetUrl } from './bootstrap/assetBootstrap';
 import type { ViewerWebviewConfig } from './protocol';
 
 /** Families Word documents most commonly reference; resolved to bundled metric-compatible faces. */
@@ -46,36 +48,67 @@ const STYLE_VARIANTS: ReadonlyArray<{ bold: boolean; italic: boolean }> = [
 	{ bold: true, italic: true },
 ];
 
-let docxFontDefinitions: Promise<FontDefinition[]> | undefined;
+let docxFontDefinitions: Promise<FontConfigurationFragment> | undefined;
 let pptxFontFaces: Promise<PptxFontFace[]> | undefined;
 
 /**
- * Font definitions for the eigenpal docx editor: bundled metric-compatible faces exposed under
- * the Office family names, served from extension assets (never the network).
+ * Byte-backed font configuration for the docx editor: our bundled metric-compatible faces exposed
+ * under the Office family names, loaded from extension assets (never the network).
  *
- * `FontDefinition` has no italic axis, so italic runs are synthesized by the browser from the
- * registered regular/bold faces — same tradeoff as upstream's own `fonts` prop examples.
+ * Every family is registered in all four bold/italic variants under the name a document names it by
+ * (`Calibri`, …) with the bytes of the metric-compatible substitute (`Carlito`) — the aliasing that
+ * keeps Word line breaks and pagination. Each face yields its own source; a face whose bytes cannot
+ * be read or admitted is skipped with a warning while the rest still load (per-face degradation is
+ * the upstream semantic), so one bad asset never costs the whole document its metrics.
  */
-export function loadDocxFontDefinitions(config: ViewerWebviewConfig): Promise<FontDefinition[]> {
+export function loadDocxFontDefinitions(config: ViewerWebviewConfig): Promise<FontConfigurationFragment> {
 	if (docxFontDefinitions) return docxFontDefinitions;
 
 	docxFontDefinitions = (async () => {
-		if (config.fonts === 'off') return [];
-		const defs = await Promise.all(
+		if (config.fonts === 'off') {
+			console.info('[office-file-viewer] bundled docx fonts disabled (officeFileViewer.fonts=off)');
+			return { supportedFamilies: [], sources: [] };
+		}
+
+		const resolved = await Promise.all(
 			DOCX_FAMILIES.flatMap((family) =>
-				[400, 700].map(async (weight): Promise<FontDefinition | undefined> => {
+				STYLE_VARIANTS.map(async ({ bold, italic }): Promise<FontSource | undefined> => {
 					const face =
-						resolveMetricCompatFace(family, weight === 700, false) ??
-						resolveLastResortFace(family, weight === 700, false);
-					if (!face?.file) return undefined;
-					// Resolve lazily at font-use time: `src` is the asset URL, the browser fetches
-					// on demand (connect-src is already scoped to the extension origin).
-					return { family, weight, src: getAssetUrl(face.file) };
+						resolveMetricCompatFace(family, bold, italic) ?? resolveLastResortFace(family, bold, italic);
+					const label = `${family} ${bold ? 'bold' : 'regular'}${italic ? ' italic' : ''}`;
+					// The request carries the AUTHORED face: the bytes may be a substitute, but the engine
+					// must find a source for the family/weight/style the document actually asked for.
+					const request: FontFaceRequest = {
+						family,
+						weight: bold ? 700 : 400,
+						style: italic ? 'italic' : 'normal',
+					};
+					try {
+						// Same asset lookup the engine bundles use (rewritten to `__extAssetUrl`): extension
+						// origin, served from out/media/assets — no font CDN, no egress.
+						const bytes = new Uint8Array(await loadBundledFontBytes(face));
+						const outcome = createFontSource(bytes, request);
+						if ('failure' in outcome) {
+							console.warn(
+								`[office-file-viewer] docx font face "${label}" rejected (${outcome.failure.reason}); skipping it`,
+							);
+							return undefined;
+						}
+						return outcome.source;
+					} catch (error) {
+						console.warn(`[office-file-viewer] docx font face "${label}" could not be loaded; skipping it`, error);
+						return undefined;
+					}
 				}),
 			),
 		);
-		return defs.filter((def): def is FontDefinition => def !== undefined);
+
+		return {
+			supportedFamilies: [...DOCX_FAMILIES],
+			sources: resolved.filter((source): source is FontSource => source !== undefined),
+		};
 	})();
+
 	return docxFontDefinitions;
 }
 
