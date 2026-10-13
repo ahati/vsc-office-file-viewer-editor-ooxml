@@ -17,9 +17,9 @@ import {
 	MAX_CANVAS_DIMENSION,
 	paintPage,
 	sizeCanvasForPage,
-	type DiagramHandle,
-	type PageDisplayList,
-} from '../../vendor/betteroffice/vsdx/src/index';
+} from '../../vendor/betteroffice/vsdx/src/render/canvas';
+import type { DiagramHandle } from '../../vendor/betteroffice/vsdx/src/wasm/loader';
+import type { PageDisplayList } from '../../vendor/betteroffice/vsdx/src/types';
 import { errorText } from './util';
 
 /** Lowest zoom we ever hand to the canvas (pages can be arbitrarily large). */

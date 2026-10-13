@@ -12,7 +12,8 @@
  *
  * Only the active page is laid out and painted (`PageRenderer`); the tab strip switches pages.
  */
-import type { DiagramHandle, PageSnapshot } from '../../vendor/betteroffice/vsdx/src/index';
+import type { DiagramHandle } from '../../vendor/betteroffice/vsdx/src/wasm/loader';
+import type { PageSnapshot } from '../../vendor/betteroffice/vsdx/src/types';
 import type { ViewerWebviewConfig } from '../protocol';
 import { LayersPanel } from './layersPanel';
 import { PageRenderer } from './pageRenderer';

@@ -16,7 +16,7 @@
  * lazily imported CDN provider (best effort — a failure falls back to the bundled faces).
  */
 import { loadBundledFontBytes, resolveLastResortFace, resolveMetricCompatFace } from '@betteroffice/fonts';
-import type { VsdxFontFace } from '../../vendor/betteroffice/vsdx/src/index';
+import type { VsdxFontFace } from '../../vendor/betteroffice/vsdx/src/types';
 import type { ViewerWebviewConfig } from '../protocol';
 import { errorText } from './util';
 

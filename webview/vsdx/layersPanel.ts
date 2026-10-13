@@ -6,7 +6,8 @@
  * default for every page. Toggling changes the display list, so the owner must invalidate the
  * layout and repaint (`onLayersChanged`).
  */
-import type { DiagramHandle, PageLayer } from '../../vendor/betteroffice/vsdx/src/index';
+import type { DiagramHandle } from '../../vendor/betteroffice/vsdx/src/wasm/loader';
+import type { PageLayer } from '../../vendor/betteroffice/vsdx/src/types';
 import { asError, errorText } from './util';
 
 export interface LayersPanelCallbacks {

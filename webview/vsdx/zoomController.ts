@@ -12,7 +12,7 @@ import {
 	canvasPointToModel,
 	modelPointToCanvas,
 	type ModelPoint,
-} from '../../vendor/betteroffice/vsdx/src/index';
+} from '../../vendor/betteroffice/vsdx/src/render/canvas';
 import { MAX_ZOOM_SCALE, MIN_ZOOM_SCALE, type PageRenderer } from './pageRenderer';
 import { asError, clamp, errorText } from './util';
 

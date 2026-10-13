@@ -242,6 +242,12 @@ const webviewConfig = {
 	minify: production,
 	logLevel: 'warning',
 	plugins: [assetImportRewrite, vsdxGeneratedStub],
+	// Collaboration/agent removal: the react package hard-imports AgentPanel from its agents
+	// package; the product never renders it, so alias it to a no-op stub (webview/bootstrap/agentsStub.ts).
+	alias: {
+		'@eigenpal/docx-editor-agents': fromRoot('webview/bootstrap/agentsStub.ts'),
+		'@eigenpal/docx-editor-agents/react': fromRoot('webview/bootstrap/agentsStub.ts'),
+	},
 };
 
 /**
@@ -378,6 +384,32 @@ async function writeManifest(copiedAssets, metafiles, { check = true } = {}) {
 
 /* ------------------------------------------------------------------ postchecks */
 
+
+/**
+ * Offline + no-collaboration guard (product guarantees): shipped webview bundles must never
+ * contain a realtime transport (collaboration is transport-injected by design and none is wired)
+ * or beacon machinery. `fonts.googleapis` in the docx bundle is the eigenpal loader string that
+ * `setGoogleFontsEnabled(false)` disables at module scope — CSP `connect-src` blocks it regardless.
+ */
+async function verifyNoEgressNoCollaboration() {
+	const problems = [];
+	for (const entry of webviewEntries) {
+		const file = fromRoot('out/media', `${entry.out}.js`);
+		if (!existsSync(file)) continue;
+		const code = await readFile(file, 'utf8');
+		for (const marker of ['new WebSocket', 'sendBeacon', 'EventSource', 'docx-editor-agents']) {
+			if (code.includes(marker)) problems.push(`${path.basename(file)} contains "${marker}"`);
+		}
+	}
+	const vsdx = fromRoot('out/media', 'webview-vsdx.js');
+	if (existsSync(vsdx) && (await readFile(vsdx, 'utf8')).includes('CollaborationProvider')) {
+		problems.push('webview-vsdx.js contains CollaborationProvider (vsdx barrel import regressed)');
+	}
+	if (problems.length > 0) {
+		throw new Error(`offline/no-collaboration verification failed:\n  ${problems.join('\n  ')}`);
+	}
+}
+
 /* -------------------------------------------------------------------- driver */
 
 async function buildOnce() {
@@ -388,6 +420,7 @@ async function buildOnce() {
 	await esbuild.build(integrationTestConfig);
 
 	const manifest = await writeManifest(copiedAssets, [webviews.metafile]);
+	await verifyNoEgressNoCollaboration();
 
 	const assetCount = Object.keys(manifest.assets).length;
 	console.log(

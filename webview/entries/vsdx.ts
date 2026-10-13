@@ -26,7 +26,7 @@ import { loadVsdxFonts } from '../vsdx/fonts';
 import { mountVsdxShell, type VsdxErrorPhase, type VsdxShell, type VsdxShellState } from '../vsdx/shell';
 import { roundMs } from '../vsdx/util';
 import { getVsCodeApi, type VsCodeApi } from '../vscodeApi';
-import { initWasm, openDiagram, type DiagramHandle } from '../../vendor/betteroffice/vsdx/src/index';
+import { initWasm, openDiagram, type DiagramHandle } from '../../vendor/betteroffice/vsdx/src/wasm/loader';
 
 const FORMAT = 'vsdx' as const;
 /** Manifest key of the compiled vsdx wasm module (scripts/build.mjs emits assets as `assets/<name>`). */

@@ -39,7 +39,28 @@ function ensureReactRoot(): ReturnType<typeof createRoot> {
 }
 
 /** Mounts (or re-renders) the xlsx viewer for one `init` payload. */
+
+/**
+ * AI/agent chrome removal (product decision): the BetterOffice editors render an
+ * "Agent proposals" toolbar button and side panels for their review-agents feature.
+ * This extension has no agent/collaboration surface, so the nodes are hidden outright
+ * (stable `data-testid` hooks, idempotent style injection at mount).
+ */
+const NO_AI_CSS_ID = 'office-no-ai-chrome';
+
+function hideAiChrome(selectors: string[]): void {
+	const owner = resolveHost()?.ownerDocument ?? document;
+	let style = owner.getElementById(NO_AI_CSS_ID) as HTMLStyleElement | null;
+	if (!style) {
+		style = owner.createElement('style');
+		style.id = NO_AI_CSS_ID;
+		owner.head.appendChild(style);
+	}
+	style.textContent += `\n${selectors.map((s) => `${s} { display: none !important; }`).join('\n')}`;
+}
+
 export async function mountXlsx(init: ViewerInit, context: ViewerContext): Promise<void> {
+	hideAiChrome(['[data-testid="xlsx-proposals-button"]', '[data-testid="xlsx-proposals-panel"]', '[data-testid="xlsx-proposals-count"]']);
 	const engine = await import('@betteroffice/xlsx');
 	if (!engine.isWasmAvailable()) {
 		const bytes = getAssetBytes(WASM_ASSET) ?? (await (await fetch(getAssetUrl(WASM_ASSET))).arrayBuffer());
